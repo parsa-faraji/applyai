@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ApplyAI - Tailored Job Applications in Seconds</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="/" class="logo">ApplyAI</a>
+            <div class="nav-links">
+                <a href="#how-it-works">How it works</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#app" class="btn btn-primary">Get Started</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-container">
+            <div class="hero-badge">Stop wasting hours on applications</div>
+            <h1>Tailored resumes & cover letters in <span class="highlight">10 seconds</span></h1>
+            <p class="hero-sub">Paste a job posting. Get a perfectly customized application. Land more interviews.</p>
+            <div class="hero-cta">
+                <a href="#app" class="btn btn-primary btn-lg">Try it free</a>
+                <span class="hero-note">No signup required</span>
+            </div>
+            <div class="hero-stats">
+                <div class="stat-item">
+                    <span class="stat-num">3,240+</span>
+                    <span class="stat-label">Applications generated</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">67%</span>
+                    <span class="stat-label">More interviews</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-num">2 min</span>
+                    <span class="stat-label">Avg. time saved per app</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="how-it-works" class="how-it-works">
+        <div class="container">
+            <h2>How it works</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-num">1</div>
+                    <h3>Paste the job posting</h3>
+                    <p>Copy the job description or just paste the URL. We extract all the key requirements.</p>
+                </div>
+                <div class="step">
+                    <div class="step-num">2</div>
+                    <h3>Upload your resume</h3>
+                    <p>Drop your existing resume. PDF, DOCX, or just paste the text.</p>
+                </div>
+                <div class="step">
+                    <div class="step-num">3</div>
+                    <h3>Get tailored content</h3>
+                    <p>AI rewrites your resume to match the job + generates a personalized cover letter.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="app" class="app-section">
+        <div class="container">
+            <div class="app-container">
+                <div class="app-input">
+                    <h2>Generate your application</h2>
+
+                    <div class="input-group">
+                        <label for="job-input">Job Description</label>
+                        <textarea id="job-input" placeholder="Paste the job description or URL here..."></textarea>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="resume-input">Your Resume</label>
+                        <textarea id="resume-input" placeholder="Paste your current resume here..."></textarea>
+                        <div class="file-upload" id="file-upload">
+                            <span>or drop a file here</span>
+                            <input type="file" id="file-input" accept=".pdf,.doc,.docx,.txt">
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary btn-lg btn-full" id="generate-btn">
+                        <span class="btn-text">Generate Tailored Application</span>
+                        <span class="btn-loading" style="display:none;">Analyzing...</span>
+                    </button>
+                </div>
+
+                <div class="app-output" id="output-section" style="display:none;">
+                    <div class="output-tabs">
+                        <button class="tab active" data-tab="resume">Tailored Resume</button>
+                        <button class="tab" data-tab="cover">Cover Letter</button>
+                        <button class="tab" data-tab="tips">Interview Tips</button>
+                    </div>
+
+                    <div class="output-content">
+                        <div class="tab-content active" id="resume-content"></div>
+                        <div class="tab-content" id="cover-content"></div>
+                        <div class="tab-content" id="tips-content"></div>
+                    </div>
+
+                    <div class="output-actions">
+                        <button class="btn btn-secondary" id="copy-btn">Copy to clipboard</button>
+                        <button class="btn btn-secondary" id="download-btn">Download as PDF</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="pricing">
+        <div class="container">
+            <h2>Simple pricing</h2>
+            <p class="pricing-sub">Start free. Upgrade when you're ready.</p>
+
+            <div class="pricing-cards">
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Free</h3>
+                        <div class="price">$0</div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>3 applications per month</li>
+                        <li>Basic resume tailoring</li>
+                        <li>Cover letter generation</li>
+                    </ul>
+                    <a href="#app" class="btn btn-secondary btn-full">Get started</a>
+                </div>
+
+                <div class="pricing-card featured">
+                    <div class="pricing-badge">Most popular</div>
+                    <div class="pricing-header">
+                        <h3>Pro</h3>
+                        <div class="price">$12<span>/month</span></div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>Unlimited applications</li>
+                        <li>Advanced AI tailoring</li>
+                        <li>Interview prep tips</li>
+                        <li>Application tracker</li>
+                        <li>Priority support</li>
+                    </ul>
+                    <a href="#app" class="btn btn-primary btn-full">Start free trial</a>
+                </div>
+
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Pay per use</h3>
+                        <div class="price">$2<span>/application</span></div>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>No commitment</li>
+                        <li>Full features per use</li>
+                        <li>Buy credits in bulk</li>
+                    </ul>
+                    <a href="#app" class="btn btn-secondary btn-full">Buy credits</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Stop sending generic applications</h2>
+            <p>Join thousands of job seekers landing more interviews with tailored applications.</p>
+            <a href="#app" class="btn btn-primary btn-lg">Generate your first application</a>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <span class="logo">ApplyAI</span>
+                    <p>Tailored job applications in seconds.</p>
+                </div>
+                <div class="footer-links">
+                    <a href="#">Privacy</a>
+                    <a href="#">Terms</a>
+                    <a href="#">Contact</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 ApplyAI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
