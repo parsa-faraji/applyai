@@ -1,0 +1,20 @@
+{
+  "name": "applyai",
+  "version": "1.0.0",
+  "description": "AI-powered job application generator - tailored resumes and cover letters in seconds",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod",
+    "deploy:preview": "vercel"
+  },
+  "keywords": [
+    "ai",
+    "resume",
+    "job-application",
+    "cover-letter",
+    "openai",
+    "career"
+  ],
+  "author": "Parsa Faraji Alamouti",
+  "license": "MIT"
+}

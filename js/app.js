@@ -1,9 +1,16 @@
 /**
- * ApplyAI - Main Application Logic
+ * ApplyAI - Job Application Generator
+ * Production-ready with real OpenAI integration
  */
 
 (function() {
     'use strict';
+
+    // Config - change this for different environments
+    const CONFIG = {
+        apiUrl: '/api/generate', // Vercel serverless function
+        useMockData: false // Set to true for testing without API
+    };
 
     const elements = {
         jobInput: document.getElementById('job-input'),
@@ -20,6 +27,13 @@
         tabContents: document.querySelectorAll('.tab-content')
     };
 
+    // Store generated content
+    let generatedContent = {
+        resume: '',
+        cover: '',
+        tips: ''
+    };
+
     function init() {
         elements.generateBtn.addEventListener('click', handleGenerate);
         elements.fileInput.addEventListener('change', handleFileUpload);
@@ -29,165 +43,152 @@
         elements.tabs.forEach(tab => {
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
+
+        // Load saved resume from localStorage
+        const savedResume = localStorage.getItem('applyai_resume');
+        if (savedResume) {
+            elements.resumeInput.value = savedResume;
+        }
+
+        // Save resume on change
+        elements.resumeInput.addEventListener('blur', () => {
+            localStorage.setItem('applyai_resume', elements.resumeInput.value);
+        });
     }
 
     async function handleGenerate() {
         const jobDesc = elements.jobInput.value.trim();
         const resume = elements.resumeInput.value.trim();
 
-        if (!jobDesc || !resume) {
-            alert('Please fill in both the job description and your resume.');
+        if (!jobDesc) {
+            showError('Please paste the job description.');
+            elements.jobInput.focus();
             return;
         }
 
-        // Show loading
-        const btnText = elements.generateBtn.querySelector('.btn-text');
-        const btnLoading = elements.generateBtn.querySelector('.btn-loading');
-        btnText.style.display = 'none';
-        btnLoading.style.display = 'inline';
-        elements.generateBtn.disabled = true;
+        if (!resume) {
+            showError('Please paste your resume.');
+            elements.resumeInput.focus();
+            return;
+        }
 
-        // Simulate AI processing (replace with actual API call)
-        await simulateProcessing(jobDesc, resume);
+        setLoading(true);
 
-        // Show output
-        elements.outputSection.style.display = 'block';
-        elements.outputSection.scrollIntoView({ behavior: 'smooth' });
+        try {
+            if (CONFIG.useMockData) {
+                await generateMockContent(jobDesc, resume);
+            } else {
+                await generateRealContent(jobDesc, resume);
+            }
 
-        // Reset button
-        btnText.style.display = 'inline';
-        btnLoading.style.display = 'none';
-        elements.generateBtn.disabled = false;
+            // Show output section
+            elements.outputSection.style.display = 'block';
+            elements.outputSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+            // Track usage (you can add analytics here)
+            trackGeneration();
+
+        } catch (error) {
+            console.error('Generation error:', error);
+            showError('Something went wrong. Please try again.');
+        } finally {
+            setLoading(false);
+        }
     }
 
-    async function simulateProcessing(jobDesc, resume) {
+    async function generateRealContent(jobDesc, resume) {
+        // Generate all three types in parallel
+        const [resumeResult, coverResult, tipsResult] = await Promise.all([
+            callAPI(jobDesc, resume, 'resume'),
+            callAPI(jobDesc, resume, 'cover'),
+            callAPI(jobDesc, resume, 'tips')
+        ]);
+
+        generatedContent.resume = resumeResult;
+        generatedContent.cover = coverResult;
+        generatedContent.tips = tipsResult;
+
+        elements.resumeContent.innerHTML = formatContent(resumeResult, 'resume');
+        elements.coverContent.innerHTML = formatContent(coverResult, 'cover');
+        elements.tipsContent.innerHTML = formatContent(tipsResult, 'tips');
+    }
+
+    async function callAPI(jobDesc, resume, type) {
+        const response = await fetch(CONFIG.apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                jobDescription: jobDesc,
+                resume: resume,
+                type: type
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'API request failed');
+        }
+
+        const data = await response.json();
+        return data.content;
+    }
+
+    function formatContent(content, type) {
+        // Convert markdown-like formatting to HTML
+        let html = content
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/^### (.*$)/gm, '<h4>$1</h4>')
+            .replace(/^## (.*$)/gm, '<h3>$1</h3>')
+            .replace(/^# (.*$)/gm, '<h3>$1</h3>')
+            .replace(/^\- (.*$)/gm, '<li>$1</li>')
+            .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>');
+
+        // Wrap lists
+        html = html.replace(/(<li>.*<\/li>)+/g, '<ul>$&</ul>');
+
+        // Add score badge based on type
+        const badges = {
+            resume: `<div class="score-badge">
+                <span class="score-icon">✓</span>
+                <span><strong>ATS Optimized</strong> - Keywords matched to job description</span>
+            </div>`,
+            cover: `<div class="score-badge success">
+                <span class="score-icon">✓</span>
+                <span><strong>Personalized</strong> - Tailored to this specific role</span>
+            </div>`,
+            tips: `<div class="score-badge info">
+                <span class="score-icon">💡</span>
+                <span><strong>Interview Ready</strong> - Prepare with these insights</span>
+            </div>`
+        };
+
+        return `<div class="generated-content"><p>${html}</p></div>${badges[type] || ''}`;
+    }
+
+    async function generateMockContent(jobDesc, resume) {
         // Simulate API delay
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Extract some keywords from job description for personalization
         const keywords = extractKeywords(jobDesc);
-        const jobTitle = extractJobTitle(jobDesc);
 
-        // Generate mock tailored content
-        elements.resumeContent.innerHTML = generateTailoredResume(resume, keywords, jobTitle);
-        elements.coverContent.innerHTML = generateCoverLetter(resume, keywords, jobTitle);
-        elements.tipsContent.innerHTML = generateInterviewTips(keywords, jobTitle);
+        generatedContent.resume = `Professional Summary tailored for this role with keywords: ${keywords.join(', ')}`;
+        generatedContent.cover = `Cover letter highlighting relevant experience...`;
+        generatedContent.tips = `Interview preparation tips...`;
+
+        elements.resumeContent.innerHTML = formatContent(generatedContent.resume, 'resume');
+        elements.coverContent.innerHTML = formatContent(generatedContent.cover, 'cover');
+        elements.tipsContent.innerHTML = formatContent(generatedContent.tips, 'tips');
     }
 
     function extractKeywords(text) {
-        const commonKeywords = [
-            'JavaScript', 'Python', 'React', 'Node.js', 'AWS', 'SQL', 'Machine Learning',
-            'TypeScript', 'Git', 'Agile', 'REST API', 'Docker', 'Kubernetes', 'CI/CD',
-            'leadership', 'communication', 'problem-solving', 'teamwork', 'analytical'
-        ];
-
-        return commonKeywords.filter(keyword =>
-            text.toLowerCase().includes(keyword.toLowerCase())
-        ).slice(0, 6);
-    }
-
-    function extractJobTitle(text) {
-        const titles = ['Software Engineer', 'Developer', 'Data Scientist', 'Product Manager',
-                       'Designer', 'Analyst', 'Engineer', 'Manager'];
-        for (const title of titles) {
-            if (text.toLowerCase().includes(title.toLowerCase())) {
-                return title;
-            }
-        }
-        return 'the position';
-    }
-
-    function generateTailoredResume(resume, keywords, jobTitle) {
-        return `
-            <h4>Professional Summary</h4>
-            <p>Results-driven professional with proven expertise in ${keywords.slice(0, 3).join(', ') || 'relevant technologies'}.
-            Seeking to leverage technical skills and experience as a ${jobTitle}.
-            Track record of delivering high-impact solutions and collaborating effectively with cross-functional teams.</p>
-
-            <h4>Key Skills (Optimized for ATS)</h4>
-            <ul>
-                ${keywords.map(k => `<li><strong>${k}</strong> - Highlighted based on job requirements</li>`).join('')}
-                ${keywords.length === 0 ? '<li>Skills will be extracted from your resume and matched to the job</li>' : ''}
-            </ul>
-
-            <h4>Experience Highlights</h4>
-            <p><em>Your experience has been reworded to emphasize:</em></p>
-            <ul>
-                <li>Quantifiable achievements (added metrics where possible)</li>
-                <li>Keywords from the job description</li>
-                <li>Action verbs that demonstrate impact</li>
-                <li>Relevant technical skills prominently featured</li>
-            </ul>
-
-            <p style="background: #f0f9ff; padding: 12px; border-radius: 6px; margin-top: 20px; font-size: 13px;">
-                <strong>ATS Score: 87/100</strong><br>
-                Your tailored resume matches 87% of the job requirements. Key improvements: Added 4 missing keywords,
-                restructured bullet points for better scanning, optimized formatting.
-            </p>
-        `;
-    }
-
-    function generateCoverLetter(resume, keywords, jobTitle) {
-        return `
-            <p>Dear Hiring Manager,</p>
-
-            <p>I am writing to express my strong interest in the ${jobTitle} position at your company.
-            With my background in ${keywords.slice(0, 2).join(' and ') || 'relevant technologies'},
-            I am confident in my ability to contribute meaningfully to your team.</p>
-
-            <p>In my previous roles, I have demonstrated expertise in:</p>
-            <ul>
-                ${keywords.slice(0, 4).map(k => `<li>Applying ${k} to solve complex business challenges</li>`).join('')}
-                ${keywords.length === 0 ? '<li>Delivering results in fast-paced environments</li>' : ''}
-            </ul>
-
-            <p>What excites me most about this opportunity is the chance to work on challenging problems
-            while growing alongside a talented team. I am particularly drawn to your company's focus on
-            innovation and impact.</p>
-
-            <p>I would welcome the opportunity to discuss how my skills and experience align with your needs.
-            Thank you for considering my application.</p>
-
-            <p>Best regards,<br>
-            [Your Name]</p>
-
-            <p style="background: #f0fdf4; padding: 12px; border-radius: 6px; margin-top: 20px; font-size: 13px;">
-                <strong>Personalization Score: 92%</strong><br>
-                This cover letter includes 6 job-specific keywords and addresses key requirements mentioned in the posting.
-            </p>
-        `;
-    }
-
-    function generateInterviewTips(keywords, jobTitle) {
-        return `
-            <h4>Prepare for These Questions</h4>
-            <p>Based on the job description, you're likely to be asked about:</p>
-            <ul>
-                ${keywords.map(k => `<li>"Tell me about your experience with <strong>${k}</strong>"</li>`).join('')}
-                <li>"Describe a challenging project and how you handled it"</li>
-                <li>"Why are you interested in this ${jobTitle} role?"</li>
-            </ul>
-
-            <h4>Key Points to Emphasize</h4>
-            <ul>
-                <li>Your hands-on experience with the required technologies</li>
-                <li>Specific metrics and achievements from past roles</li>
-                <li>How you've collaborated with teams and stakeholders</li>
-                <li>Your enthusiasm for the company's mission</li>
-            </ul>
-
-            <h4>Questions to Ask Them</h4>
-            <ul>
-                <li>"What does success look like in this role after 6 months?"</li>
-                <li>"How does the team approach ${keywords[0] || 'technical challenges'}?"</li>
-                <li>"What are the biggest priorities for this position right now?"</li>
-            </ul>
-
-            <p style="background: #fefce8; padding: 12px; border-radius: 6px; margin-top: 20px; font-size: 13px;">
-                <strong>Pro tip:</strong> Review the company's recent news and mention something specific
-                during your interview to show genuine interest.
-            </p>
-        `;
+        const keywords = ['JavaScript', 'Python', 'React', 'Node.js', 'AWS', 'SQL',
+                         'TypeScript', 'Git', 'Agile', 'Docker', 'leadership'];
+        return keywords.filter(k => text.toLowerCase().includes(k.toLowerCase())).slice(0, 5);
     }
 
     function switchTab(tabId) {
@@ -204,39 +205,97 @@
         const file = e.target.files[0];
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = function(event) {
-            // For simplicity, just show filename.
-            // In production, you'd parse PDF/DOCX
-            elements.resumeInput.value = `[Uploaded: ${file.name}]\n\nFile contents would be extracted here. For now, please paste your resume text.`;
-        };
-        reader.readAsText(file);
+        // For text files, read directly
+        if (file.type === 'text/plain') {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                elements.resumeInput.value = event.target.result;
+            };
+            reader.readAsText(file);
+            return;
+        }
+
+        // For PDF/DOCX, show message (would need server-side processing)
+        elements.resumeInput.value = `[File uploaded: ${file.name}]\n\nFor best results, please paste your resume text directly. PDF/DOCX parsing coming soon!`;
+        elements.resumeInput.focus();
     }
 
     function handleCopy() {
-        const activeContent = document.querySelector('.tab-content.active');
-        const text = activeContent.innerText;
+        const activeTab = document.querySelector('.tab.active').dataset.tab;
+        const content = generatedContent[activeTab] || '';
 
-        navigator.clipboard.writeText(text).then(() => {
+        navigator.clipboard.writeText(content).then(() => {
+            const originalText = elements.copyBtn.textContent;
             elements.copyBtn.textContent = 'Copied!';
+            elements.copyBtn.classList.add('success');
             setTimeout(() => {
-                elements.copyBtn.textContent = 'Copy to clipboard';
+                elements.copyBtn.textContent = originalText;
+                elements.copyBtn.classList.remove('success');
             }, 2000);
+        }).catch(() => {
+            showError('Failed to copy. Please select and copy manually.');
         });
     }
 
     function handleDownload() {
-        const activeContent = document.querySelector('.tab-content.active');
-        const text = activeContent.innerText;
+        const activeTab = document.querySelector('.tab.active').dataset.tab;
+        const content = generatedContent[activeTab] || '';
+        const filename = `applyai-${activeTab}-${Date.now()}.txt`;
 
-        const blob = new Blob([text], { type: 'text/plain' });
+        const blob = new Blob([content], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'applyai-document.txt';
+        a.download = filename;
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
 
+    function setLoading(loading) {
+        const btnText = elements.generateBtn.querySelector('.btn-text');
+        const btnLoading = elements.generateBtn.querySelector('.btn-loading');
+
+        if (loading) {
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            btnLoading.innerHTML = '<span class="loading-spinner"></span> Generating with AI...';
+            elements.generateBtn.disabled = true;
+            elements.generateBtn.classList.add('loading');
+        } else {
+            btnText.style.display = 'inline';
+            btnLoading.style.display = 'none';
+            elements.generateBtn.disabled = false;
+            elements.generateBtn.classList.remove('loading');
+        }
+    }
+
+    function showError(message) {
+        // Create toast notification
+        const toast = document.createElement('div');
+        toast.className = 'toast error';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    function trackGeneration() {
+        // Track usage in localStorage
+        const usage = JSON.parse(localStorage.getItem('applyai_usage') || '{"count": 0, "dates": []}');
+        usage.count++;
+        usage.dates.push(new Date().toISOString());
+        localStorage.setItem('applyai_usage', JSON.stringify(usage));
+
+        // You can add analytics tracking here (Google Analytics, Mixpanel, etc.)
+        console.log('Generation tracked:', usage.count);
+    }
+
+    // Initialize
     init();
 })();
