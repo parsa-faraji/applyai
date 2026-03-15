@@ -24,6 +24,10 @@
         pricePollingId: null,  // interval ID for market price polling
         positionPollingId: null, // interval ID for position P&L refresh
         liveContext: null,     // current market's live order book + history
+        // Monitor
+        monitorId: null,       // interval ID for position monitor
+        monitorRunning: false,
+        rescanId: null,        // interval ID for auto re-scan
     };
 
     const DEFAULTS = {
@@ -31,6 +35,10 @@
         tradingBudget: 100,
         riskLevel: 'moderate',
         autoTrade: false,
+        stopLossPct: 30,
+        takeProfitPct: 50,
+        monitorInterval: 5,
+        autoRescan: 0,
     };
 
     const PRICE_POLL_INTERVAL = 10000;  // 10s for market prices
@@ -68,6 +76,8 @@
         document.getElementById('deriveKeysBtn')?.addEventListener('click', deriveApiKeys);
         document.getElementById('runBotBtn')?.addEventListener('click', () => runBot(false));
         document.getElementById('dryRunBtn')?.addEventListener('click', () => runBot(true));
+        document.getElementById('startMonitorBtn')?.addEventListener('click', startMonitor);
+        document.getElementById('stopMonitorBtn')?.addEventListener('click', stopMonitor);
 
         const searchInput = document.getElementById('marketSearch');
         if (searchInput) {
@@ -111,6 +121,15 @@
         if (tradingBudget) tradingBudget.value = s.tradingBudget || DEFAULTS.tradingBudget;
         if (riskLevel) riskLevel.value = s.riskLevel || DEFAULTS.riskLevel;
         if (autoTrade) autoTrade.checked = s.autoTrade || DEFAULTS.autoTrade;
+
+        const stopLoss = document.getElementById('stopLossPct');
+        const takeProfit = document.getElementById('takeProfitPct');
+        const monitorInt = document.getElementById('monitorInterval');
+        const autoRescan = document.getElementById('autoRescan');
+        if (stopLoss) stopLoss.value = s.stopLossPct || DEFAULTS.stopLossPct;
+        if (takeProfit) takeProfit.value = s.takeProfitPct || DEFAULTS.takeProfitPct;
+        if (monitorInt) monitorInt.value = s.monitorInterval ?? DEFAULTS.monitorInterval;
+        if (autoRescan) autoRescan.value = s.autoRescan ?? DEFAULTS.autoRescan;
     }
 
     function saveSettings() {
@@ -127,6 +146,10 @@
             tradingBudget: newBudget,
             riskLevel: document.getElementById('riskLevel')?.value || DEFAULTS.riskLevel,
             autoTrade: document.getElementById('autoTrade')?.checked || false,
+            stopLossPct: parseInt(document.getElementById('stopLossPct')?.value) || DEFAULTS.stopLossPct,
+            takeProfitPct: parseInt(document.getElementById('takeProfitPct')?.value) || DEFAULTS.takeProfitPct,
+            monitorInterval: parseInt(document.getElementById('monitorInterval')?.value ?? DEFAULTS.monitorInterval),
+            autoRescan: parseInt(document.getElementById('autoRescan')?.value ?? DEFAULTS.autoRescan),
         };
         localStorage.setItem('pb_settings', JSON.stringify(state.settings));
 
@@ -1171,6 +1194,191 @@
         entry.innerHTML = `<span class="time">${time}</span>${escapeHtml(message)}`;
         logEl.appendChild(entry);
         logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // ── Position Monitor ────────────────────────────────────
+    // Continuously checks positions for stop-loss, take-profit, price spikes
+
+    function startMonitor() {
+        if (state.monitorRunning) return;
+
+        const intervalMin = state.settings.monitorInterval ?? DEFAULTS.monitorInterval;
+        if (intervalMin === 0) {
+            showToast('Monitor interval set to Off — change it in Settings', 'error');
+            return;
+        }
+
+        state.monitorRunning = true;
+        document.getElementById('startMonitorBtn').style.display = 'none';
+        document.getElementById('stopMonitorBtn').style.display = '';
+
+        addBotLog('info', `Monitor started — checking every ${intervalMin}min (SL: ${state.settings.stopLossPct || DEFAULTS.stopLossPct}%, TP: ${state.settings.takeProfitPct || DEFAULTS.takeProfitPct}%)`);
+
+        runMonitorCheck(); // immediate first check
+        state.monitorId = setInterval(runMonitorCheck, intervalMin * 60 * 1000);
+
+        // Also start auto re-scan if configured
+        const rescanMin = state.settings.autoRescan ?? DEFAULTS.autoRescan;
+        if (rescanMin > 0) {
+            addBotLog('info', `Auto re-scan enabled — scanning for new trades every ${rescanMin}min`);
+            state.rescanId = setInterval(() => {
+                if (!state.botRunning) runBot(false);
+            }, rescanMin * 60 * 1000);
+        }
+
+        showToast('Monitor started', 'success');
+    }
+
+    function stopMonitor() {
+        state.monitorRunning = false;
+        if (state.monitorId) { clearInterval(state.monitorId); state.monitorId = null; }
+        if (state.rescanId) { clearInterval(state.rescanId); state.rescanId = null; }
+
+        document.getElementById('startMonitorBtn').style.display = '';
+        document.getElementById('stopMonitorBtn').style.display = 'none';
+
+        addBotLog('info', 'Monitor stopped');
+        showToast('Monitor stopped', 'info');
+    }
+
+    async function runMonitorCheck() {
+        if (state.positions.length === 0) return;
+
+        const alertsEl = document.getElementById('monitorAlerts');
+        const logEl = document.getElementById('botLog');
+        if (logEl) logEl.style.display = 'block';
+
+        try {
+            const resp = await fetch('/api/monitor', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    positions: state.positions,
+                    stopLossPct: state.settings.stopLossPct || DEFAULTS.stopLossPct,
+                    takeProfitPct: state.settings.takeProfitPct || DEFAULTS.takeProfitPct,
+                    spikeThreshold: 15,
+                }),
+            });
+
+            if (!resp.ok) return;
+
+            const data = await resp.json();
+
+            // Update position prices from monitor
+            if (data.updatedPositions?.length > 0) {
+                data.updatedPositions.forEach((updated, i) => {
+                    if (state.positions[i] && updated.currentPrice != null) {
+                        state.positions[i].currentPrice = updated.currentPrice;
+                        if (updated.spikeAlerted) state.positions[i].spikeAlerted = true;
+                    }
+                });
+                localStorage.setItem('pb_positions', JSON.stringify(state.positions));
+
+                // Refresh portfolio if visible
+                if (document.getElementById('portfolioView')?.classList.contains('active')) {
+                    renderPortfolio();
+                }
+            }
+
+            // Display alerts
+            if (data.alerts?.length > 0) {
+                if (alertsEl) {
+                    alertsEl.style.display = 'block';
+                    alertsEl.innerHTML = data.alerts.map(a => `
+                        <div class="monitor-alert ${a.severity}">
+                            <span class="alert-type">${a.type.replace('_', ' ').toUpperCase()}</span>
+                            ${escapeHtml(a.message)}
+                        </div>
+                    `).join('');
+                }
+
+                data.alerts.forEach(a => {
+                    const logType = a.severity === 'critical' ? 'error' : a.severity === 'positive' ? 'trade' : 'info';
+                    addBotLog(logType, a.message);
+                });
+            }
+
+            // Auto-execute exit actions
+            if (data.actions?.length > 0) {
+                for (const action of data.actions) {
+                    if (action.type === 'exit') {
+                        addBotLog('trade', `AUTO-EXIT: Selling ${action.outcome} position in "${truncate(action.market, 40)}" (${action.reason.replace('_', ' ')})`);
+                        await executeAutoExit(action);
+                    }
+                }
+            }
+
+        } catch (err) {
+            console.error('Monitor check failed:', err);
+        }
+    }
+
+    async function executeAutoExit(action) {
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
+            if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
+            if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
+
+            const resp = await fetch('/api/trade', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    tokenId: action.tokenId,
+                    side: 'SELL',
+                    shares: action.shares,
+                    price: action.currentPrice,
+                }),
+            });
+
+            const data = await resp.json();
+            if (!resp.ok) {
+                addBotLog('error', `Exit failed: ${data.error || 'unknown error'}`);
+                return;
+            }
+
+            // Record exit trade
+            const exitTrade = {
+                ...data.trade,
+                market: action.market,
+                outcome: action.outcome,
+                exitReason: action.reason,
+                auto: true,
+            };
+            state.trades.unshift(exitTrade);
+            localStorage.setItem('pb_trades', JSON.stringify(state.trades));
+
+            // Remove position
+            const posIdx = state.positions.findIndex(
+                p => p.tokenId === action.tokenId && p.outcome === action.outcome
+            );
+            if (posIdx >= 0) {
+                const pos = state.positions[posIdx];
+                const pnl = (action.currentPrice - pos.avgPrice) * pos.shares;
+
+                // Return proceeds to budget
+                const proceeds = action.shares * action.currentPrice;
+                state.budget.spent = Math.max(0, state.budget.spent - pos.cost);
+                localStorage.setItem('pb_budget', JSON.stringify(state.budget));
+
+                state.positions.splice(posIdx, 1);
+                localStorage.setItem('pb_positions', JSON.stringify(state.positions));
+
+                const liveTag = data.trade?.live ? '[LIVE]' : '[PAPER]';
+                const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+                addBotLog('trade', `${liveTag} Sold ${action.shares.toFixed(2)} ${action.outcome} shares for $${proceeds.toFixed(2)} (P&L: ${pnlStr})`);
+                showToast(`Auto-exit: ${action.reason.replace('_', ' ')} — ${pnlStr}`, pnl >= 0 ? 'success' : 'error');
+            }
+
+            updateBudgetDisplay();
+            if (document.getElementById('portfolioView')?.classList.contains('active')) {
+                renderPortfolio();
+            }
+
+        } catch (err) {
+            addBotLog('error', `Auto-exit error: ${err.message}`);
+        }
     }
 
     // ── Utilities ──────────────────────────────────────────

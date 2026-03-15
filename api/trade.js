@@ -1,5 +1,5 @@
-// Vercel Serverless Function — Real trade execution via Polymarket CLOB
-// Signs EIP-712 orders and submits them to the CLOB API
+// Vercel Serverless Function — Trade execution via Polymarket CLOB
+// Handles both BUY and SELL orders. Signs EIP-712 and submits to CLOB API.
 
 import { ethers } from 'ethers';
 import { buildMarketOrder, signOrder, submitOrder, getMidpoint } from './lib/clob.js';
@@ -12,13 +12,21 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { tokenId, side, amount, price, negRisk } = req.body;
+    const { tokenId, side, amount, price, negRisk, shares } = req.body;
 
-    if (!tokenId || !side || !amount) {
-        return res.status(400).json({ error: 'Missing required fields: tokenId, side, amount' });
+    if (!tokenId || !side) {
+        return res.status(400).json({ error: 'Missing required fields: tokenId, side' });
     }
 
-    if (amount <= 0 || amount > 10000) {
+    // For SELL, we need shares; for BUY, we need amount
+    if (side === 'BUY' && (!amount || amount <= 0)) {
+        return res.status(400).json({ error: 'Amount required for BUY orders' });
+    }
+    if (side === 'SELL' && (!shares || shares <= 0) && (!amount || amount <= 0)) {
+        return res.status(400).json({ error: 'Shares or amount required for SELL orders' });
+    }
+
+    if (amount && (amount <= 0 || amount > 10000)) {
         return res.status(400).json({ error: 'Amount must be between $0.01 and $10,000' });
     }
 
@@ -27,20 +35,18 @@ export default async function handler(req, res) {
     const passphrase = req.headers['x-poly-passphrase'] || process.env.POLYMARKET_PASSPHRASE;
     const privateKey = req.headers['x-poly-private-key'] || process.env.POLYMARKET_PRIVATE_KEY;
 
-    // If we have full credentials + private key, do a real trade
     if (apiKey && apiSecret && passphrase && privateKey) {
         return executeLiveTrade(req, res, {
-            tokenId, side, amount, price, negRisk,
+            tokenId, side, amount, price, negRisk, shares,
             apiKey, apiSecret, passphrase, privateKey,
         });
     }
 
-    // Otherwise, paper trade (track locally)
-    return executePaperTrade(req, res, { tokenId, side, amount, price });
+    return executePaperTrade(req, res, { tokenId, side, amount, price, shares });
 }
 
 async function executeLiveTrade(req, res, params) {
-    const { tokenId, side, amount, negRisk, apiKey, apiSecret, passphrase, privateKey } = params;
+    const { tokenId, side, negRisk, apiKey, apiSecret, passphrase, privateKey } = params;
 
     try {
         // Get real-time midpoint price from the CLOB
@@ -48,42 +54,46 @@ async function executeLiveTrade(req, res, params) {
         try {
             tradePrice = await getMidpoint(tokenId);
         } catch {
-            // Fallback to provided price
             tradePrice = params.price || 0.5;
         }
 
-        // Add 1% slippage tolerance for market orders
-        const slippagePrice = side === 'BUY'
-            ? Math.min(tradePrice * 1.01, 0.99)  // pay up to 1% more
-            : Math.max(tradePrice * 0.99, 0.01);  // accept 1% less
+        // For SELL: amount = shares * price (selling shares for USDC)
+        // For BUY: amount = USDC to spend
+        let tradeAmount;
+        if (side === 'SELL') {
+            const sellShares = params.shares || (params.amount / tradePrice);
+            tradeAmount = sellShares * tradePrice;
+        } else {
+            tradeAmount = parseFloat(params.amount);
+        }
 
-        // Build the order
+        // Slippage tolerance
+        const slippagePrice = side === 'BUY'
+            ? Math.min(tradePrice * 1.01, 0.99)
+            : Math.max(tradePrice * 0.99, 0.01);
+
         const order = buildMarketOrder({
             tokenId,
             side,
-            amount: parseFloat(amount),
+            amount: tradeAmount,
             price: slippagePrice,
             feeRateBps: 0,
             negRisk: negRisk || false,
         });
 
-        // Sign with EIP-712
         const signed = await signOrder(order, privateKey, negRisk || false);
-
-        // Submit to CLOB
         const signerAddress = new ethers.Wallet(privateKey).address;
         const result = await submitOrder(signed, apiKey, apiSecret, passphrase, signerAddress);
 
-        const shares = parseFloat(amount) / tradePrice;
+        const tradeShares = side === 'BUY' ? tradeAmount / tradePrice : (params.shares || tradeAmount / tradePrice);
 
         return res.status(200).json({
             trade: {
                 id: result.orderID || result.id || `live_${Date.now()}`,
-                tokenId,
-                side,
-                amount: parseFloat(amount),
+                tokenId, side,
+                amount: tradeAmount,
                 price: tradePrice,
-                shares,
+                shares: tradeShares,
                 status: result.status || 'submitted',
                 timestamp: new Date().toISOString(),
                 live: true,
@@ -93,33 +103,37 @@ async function executeLiveTrade(req, res, params) {
 
     } catch (error) {
         console.error('Live trade error:', error);
-
-        // If CLOB fails, offer paper trade as fallback
         return res.status(502).json({
             error: `Live trade failed: ${error.message}`,
-            suggestion: 'Check your API credentials and wallet private key. You can still paper trade without CLOB credentials.',
+            suggestion: 'Check your API credentials. You can still paper trade without CLOB credentials.',
         });
     }
 }
 
 async function executePaperTrade(req, res, params) {
-    const { tokenId, side, amount, price } = params;
+    const { tokenId, side, price, shares: sellShares } = params;
     const tradePrice = price || 0.5;
-    const shares = parseFloat(amount) / tradePrice;
+
+    let amount, shares;
+    if (side === 'SELL') {
+        shares = sellShares || (params.amount / tradePrice);
+        amount = shares * tradePrice;
+    } else {
+        amount = parseFloat(params.amount);
+        shares = amount / tradePrice;
+    }
 
     return res.status(200).json({
         trade: {
             id: `paper_${Date.now()}`,
-            tokenId,
-            side,
-            amount: parseFloat(amount),
-            price: tradePrice,
-            shares,
+            tokenId, side,
+            amount, price: tradePrice, shares,
             status: 'filled',
             timestamp: new Date().toISOString(),
-            live: false,
-            paper: true,
+            live: false, paper: true,
         },
-        message: 'Paper trade executed. Add wallet private key in Settings for live CLOB execution.',
+        message: side === 'SELL'
+            ? `Paper sell executed: ${shares.toFixed(2)} shares at ${(tradePrice * 100).toFixed(0)}¢`
+            : 'Paper trade executed. Add wallet private key for live CLOB execution.',
     });
 }
