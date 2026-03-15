@@ -99,6 +99,34 @@
         <!-- Portfolio View -->
         <section id="portfolioView" class="view">
             <div class="portfolio-layout">
+                <!-- Auto-Trade Bot Control Panel -->
+                <div class="panel bot-panel">
+                    <div class="panel-header">
+                        <h2>Autonomous Trading Bot</h2>
+                        <div class="bot-status" id="botStatus">
+                            <span class="status-dot" id="botStatusDot"></span>
+                            <span id="botStatusText">Idle</span>
+                        </div>
+                    </div>
+                    <div class="bot-controls">
+                        <div class="budget-display">
+                            <div class="budget-bar-container">
+                                <div class="budget-bar" id="budgetBar" style="width: 100%"></div>
+                            </div>
+                            <div class="budget-numbers">
+                                <span>Spent: <strong id="budgetSpent">$0</strong></span>
+                                <span>Remaining: <strong id="budgetRemaining">$100</strong></span>
+                                <span>Budget: <strong id="budgetTotal">$100</strong></span>
+                            </div>
+                        </div>
+                        <div class="bot-actions">
+                            <button class="btn btn-primary btn-lg" id="runBotBtn">Run Trading Bot</button>
+                            <button class="btn btn-secondary" id="dryRunBtn">Dry Run (no real trades)</button>
+                        </div>
+                        <div id="botLog" class="bot-log" style="display:none;"></div>
+                    </div>
+                </div>
+
                 <div class="panel portfolio-summary">
                     <h2>Portfolio Overview</h2>
                     <div class="stats-grid">
@@ -160,14 +188,24 @@
                             <label for="polyPassphrase">Polymarket Passphrase</label>
                             <input type="password" id="polyPassphrase" class="form-input" placeholder="Your passphrase">
                         </div>
+                        <div class="form-group">
+                            <label for="polyPrivateKey">Wallet Private Key (Polygon)</label>
+                            <input type="password" id="polyPrivateKey" class="form-input" placeholder="0x...">
+                            <span class="form-hint warning">Required for signing live orders. Keep this secret!</span>
+                        </div>
                     </div>
                 </div>
                 <div class="panel">
                     <h2>Trading Preferences</h2>
                     <div class="settings-form">
                         <div class="form-group">
-                            <label for="maxPositionSize">Max Position Size (USDC)</label>
-                            <input type="number" id="maxPositionSize" class="form-input" value="50" min="1" max="10000">
+                            <label for="tradingBudget">Trading Budget (USDC)</label>
+                            <input type="number" id="tradingBudget" class="form-input" value="100" min="1" max="100000">
+                            <span class="form-hint">Total amount the bot is allowed to trade with</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="maxPositionSize">Max Per Trade (USDC)</label>
+                            <input type="number" id="maxPositionSize" class="form-input" value="25" min="1" max="10000">
                         </div>
                         <div class="form-group">
                             <label for="riskLevel">Risk Tolerance</label>

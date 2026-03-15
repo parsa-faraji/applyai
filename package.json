@@ -7,6 +7,9 @@
     "deploy": "vercel --prod",
     "deploy:preview": "vercel"
   },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
   "keywords": [
     "prediction-markets",
     "polymarket",

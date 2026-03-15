@@ -15,12 +15,15 @@
         trades: JSON.parse(localStorage.getItem('pb_trades') || '[]'),
         positions: JSON.parse(localStorage.getItem('pb_positions') || '[]'),
         settings: JSON.parse(localStorage.getItem('pb_settings') || '{}'),
+        budget: JSON.parse(localStorage.getItem('pb_budget') || '{"total":100,"spent":0}'),
         marketsOffset: 0,
         marketsLoading: false,
+        botRunning: false,
     };
 
     const DEFAULTS = {
-        maxPositionSize: 50,
+        maxPositionSize: 25,
+        tradingBudget: 100,
         riskLevel: 'moderate',
         autoTrade: false,
     };
@@ -31,6 +34,7 @@
         loadSettings();
         loadMarkets();
         checkApiStatus();
+        updateBudgetDisplay();
     }
 
     // ── Navigation ─────────────────────────────────────────
@@ -80,39 +84,65 @@
         // Load more
         const loadMoreBtn = document.getElementById('loadMoreBtn');
         if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMoreMarkets);
+
+        // Bot controls
+        const runBotBtn = document.getElementById('runBotBtn');
+        if (runBotBtn) runBotBtn.addEventListener('click', () => runBot(false));
+
+        const dryRunBtn = document.getElementById('dryRunBtn');
+        if (dryRunBtn) dryRunBtn.addEventListener('click', () => runBot(true));
     }
 
     // ── Settings ───────────────────────────────────────────
     function loadSettings() {
         const s = state.settings;
-        const anthropicKey = document.getElementById('anthropicKey');
-        const polyApiKey = document.getElementById('polyApiKey');
-        const polySecret = document.getElementById('polySecret');
-        const polyPassphrase = document.getElementById('polyPassphrase');
+        const fields = {
+            anthropicKey: s.anthropicKey,
+            polyApiKey: s.polyApiKey,
+            polySecret: s.polySecret,
+            polyPassphrase: s.polyPassphrase,
+            polyPrivateKey: s.polyPrivateKey,
+        };
+        for (const [id, val] of Object.entries(fields)) {
+            const el = document.getElementById(id);
+            if (el && val) el.value = val;
+        }
+
         const maxPosition = document.getElementById('maxPositionSize');
+        const tradingBudget = document.getElementById('tradingBudget');
         const riskLevel = document.getElementById('riskLevel');
         const autoTrade = document.getElementById('autoTrade');
 
-        if (anthropicKey && s.anthropicKey) anthropicKey.value = s.anthropicKey;
-        if (polyApiKey && s.polyApiKey) polyApiKey.value = s.polyApiKey;
-        if (polySecret && s.polySecret) polySecret.value = s.polySecret;
-        if (polyPassphrase && s.polyPassphrase) polyPassphrase.value = s.polyPassphrase;
         if (maxPosition) maxPosition.value = s.maxPositionSize || DEFAULTS.maxPositionSize;
+        if (tradingBudget) tradingBudget.value = s.tradingBudget || DEFAULTS.tradingBudget;
         if (riskLevel) riskLevel.value = s.riskLevel || DEFAULTS.riskLevel;
         if (autoTrade) autoTrade.checked = s.autoTrade || DEFAULTS.autoTrade;
     }
 
     function saveSettings() {
+        const newBudget = parseInt(document.getElementById('tradingBudget')?.value) || DEFAULTS.tradingBudget;
+        const oldBudget = state.settings.tradingBudget || DEFAULTS.tradingBudget;
+
         state.settings = {
             anthropicKey: document.getElementById('anthropicKey')?.value || '',
             polyApiKey: document.getElementById('polyApiKey')?.value || '',
             polySecret: document.getElementById('polySecret')?.value || '',
             polyPassphrase: document.getElementById('polyPassphrase')?.value || '',
+            polyPrivateKey: document.getElementById('polyPrivateKey')?.value || '',
             maxPositionSize: parseInt(document.getElementById('maxPositionSize')?.value) || DEFAULTS.maxPositionSize,
+            tradingBudget: newBudget,
             riskLevel: document.getElementById('riskLevel')?.value || DEFAULTS.riskLevel,
             autoTrade: document.getElementById('autoTrade')?.checked || false,
         };
         localStorage.setItem('pb_settings', JSON.stringify(state.settings));
+
+        // Update budget if changed
+        if (newBudget !== oldBudget) {
+            state.budget.total = newBudget;
+            localStorage.setItem('pb_budget', JSON.stringify(state.budget));
+            updateBudgetDisplay();
+        }
+
         showToast('Settings saved', 'success');
         checkApiStatus();
     }
@@ -135,13 +165,17 @@
         const text = document.getElementById('apiStatusText');
         const hasAnthropic = !!(state.settings.anthropicKey || '').trim();
         const hasPoly = !!(state.settings.polyApiKey || '').trim();
+        const hasWallet = !!(state.settings.polyPrivateKey || '').trim();
 
-        if (hasAnthropic && hasPoly) {
+        if (hasAnthropic && hasPoly && hasWallet) {
             dot.className = 'status-dot connected';
-            text.textContent = 'All APIs connected';
-        } else if (hasAnthropic || hasPoly) {
+            text.textContent = 'Live trading ready';
+        } else if (hasAnthropic && hasPoly) {
+            dot.className = 'status-dot connected';
+            text.textContent = 'Paper trading (no wallet)';
+        } else if (hasAnthropic) {
             dot.className = 'status-dot';
-            text.textContent = hasAnthropic ? 'Claude ready' : 'Poly ready';
+            text.textContent = 'Claude ready (paper mode)';
         } else {
             dot.className = 'status-dot error';
             text.textContent = 'Configure API keys';
@@ -544,6 +578,7 @@
             if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
             if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
             if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
 
             const resp = await fetch('/api/trade', {
                 method: 'POST',
@@ -594,7 +629,13 @@
             }
             localStorage.setItem('pb_positions', JSON.stringify(state.positions));
 
-            showToast(`Bought ${trade.shares.toFixed(2)} ${trade.outcome} shares for $${amount}`, 'success');
+            // Update budget
+            state.budget.spent += amount;
+            localStorage.setItem('pb_budget', JSON.stringify(state.budget));
+            updateBudgetDisplay();
+
+            const liveTag = data.trade?.live ? '[LIVE]' : '[PAPER]';
+            showToast(`${liveTag} Bought ${trade.shares.toFixed(2)} ${trade.outcome} shares for $${amount}`, 'success');
 
         } catch (error) {
             console.error('Trade error:', error);
@@ -745,6 +786,181 @@
         });
 
         container.innerHTML = html;
+    }
+
+    // ── Budget ─────────────────────────────────────────────
+    function updateBudgetDisplay() {
+        const total = state.budget.total || state.settings.tradingBudget || DEFAULTS.tradingBudget;
+        const spent = state.budget.spent || 0;
+        const remaining = Math.max(total - spent, 0);
+        const pct = total > 0 ? ((remaining / total) * 100) : 0;
+
+        const bar = document.getElementById('budgetBar');
+        const spentEl = document.getElementById('budgetSpent');
+        const remainEl = document.getElementById('budgetRemaining');
+        const totalEl = document.getElementById('budgetTotal');
+
+        if (bar) {
+            bar.style.width = pct + '%';
+            bar.className = pct < 20 ? 'budget-bar low' : 'budget-bar';
+        }
+        if (spentEl) spentEl.textContent = '$' + spent.toFixed(0);
+        if (remainEl) remainEl.textContent = '$' + remaining.toFixed(0);
+        if (totalEl) totalEl.textContent = '$' + total.toFixed(0);
+    }
+
+    // ── Bot ────────────────────────────────────────────────
+    async function runBot(dryRun) {
+        if (state.botRunning) {
+            showToast('Bot is already running', 'error');
+            return;
+        }
+
+        if (!state.settings.anthropicKey) {
+            showToast('Set your Anthropic API key in Settings first', 'error');
+            return;
+        }
+
+        const total = state.budget.total || state.settings.tradingBudget || DEFAULTS.tradingBudget;
+        const spent = state.budget.spent || 0;
+        const remaining = total - spent;
+
+        if (remaining < 1 && !dryRun) {
+            showToast('Budget exhausted! Increase your budget in Settings.', 'error');
+            return;
+        }
+
+        state.botRunning = true;
+        const runBtn = document.getElementById('runBotBtn');
+        const dryBtn = document.getElementById('dryRunBtn');
+        const statusDot = document.getElementById('botStatusDot');
+        const statusText = document.getElementById('botStatusText');
+        const logEl = document.getElementById('botLog');
+
+        if (runBtn) runBtn.disabled = true;
+        if (dryBtn) dryBtn.disabled = true;
+        if (statusDot) statusDot.className = 'status-dot connected';
+        if (statusText) statusText.textContent = dryRun ? 'Dry run...' : 'Trading...';
+        if (logEl) {
+            logEl.style.display = 'block';
+            logEl.innerHTML = '';
+        }
+
+        addBotLog('info', `Bot started ${dryRun ? '(DRY RUN)' : '(LIVE)'} — budget $${remaining.toFixed(0)} remaining`);
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
+            if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
+            if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
+
+            const existingTokens = state.positions.map(p => p.tokenId).filter(Boolean);
+
+            const resp = await fetch('/api/auto-trade', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    budget: total,
+                    spent,
+                    maxPerTrade: state.settings.maxPositionSize || DEFAULTS.maxPositionSize,
+                    riskLevel: state.settings.riskLevel || DEFAULTS.riskLevel,
+                    marketsToScan: 10,
+                    existingPositions: existingTokens,
+                    dryRun,
+                }),
+            });
+
+            const report = await resp.json();
+
+            // Log results
+            addBotLog('info', `Scanned ${report.marketsScanned} markets, analyzed ${report.marketsAnalyzed}`);
+
+            for (const analysis of (report.analyses || [])) {
+                const rec = analysis.recommendation;
+                if (rec.action === 'HOLD') {
+                    addBotLog('skip', `HOLD: ${truncate(analysis.market, 60)} — ${rec.reasoning || 'no edge'}`);
+                } else {
+                    addBotLog('info', `${rec.action}: ${truncate(analysis.market, 60)} (${rec.confidence} conf, ${rec.edgePercent || '?'}pt edge)`);
+                }
+            }
+
+            for (const trade of (report.trades || [])) {
+                const tag = trade.live ? 'LIVE' : (trade.status === 'dry_run' ? 'DRY' : 'PAPER');
+                addBotLog('trade', `[${tag}] ${trade.outcome} ${truncate(trade.market, 50)} — $${trade.amount} @ ${(trade.price * 100).toFixed(0)}¢`);
+
+                // Record trade in local state
+                state.trades.unshift(trade);
+
+                // Update positions
+                if (!dryRun) {
+                    const existing = state.positions.find(
+                        p => p.marketId === trade.marketId && p.outcome === trade.outcome
+                    );
+                    if (existing) {
+                        existing.shares += trade.shares;
+                        existing.cost += trade.amount;
+                        existing.avgPrice = existing.cost / existing.shares;
+                    } else {
+                        state.positions.unshift({
+                            marketId: trade.marketId,
+                            market: trade.market,
+                            outcome: trade.outcome,
+                            shares: trade.shares,
+                            cost: trade.amount,
+                            avgPrice: trade.price,
+                            currentPrice: trade.price,
+                            tokenId: trade.tokenId,
+                            timestamp: trade.timestamp,
+                        });
+                    }
+                }
+            }
+
+            for (const err of (report.errors || [])) {
+                addBotLog('error', `Error: ${err.market ? truncate(err.market, 40) + ' — ' : ''}${err.error}`);
+            }
+
+            // Update budget
+            if (!dryRun && report.totalSpent > 0) {
+                state.budget.spent += report.totalSpent;
+                localStorage.setItem('pb_budget', JSON.stringify(state.budget));
+                addBotLog('info', `Spent $${report.totalSpent.toFixed(2)} this run — $${(total - state.budget.spent).toFixed(0)} remaining`);
+            }
+
+            // Save
+            localStorage.setItem('pb_trades', JSON.stringify(state.trades));
+            localStorage.setItem('pb_positions', JSON.stringify(state.positions));
+
+            addBotLog('info', `Done — ${report.tradesExecuted} trades executed`);
+            showToast(`Bot finished: ${report.tradesExecuted} trades`, report.tradesExecuted > 0 ? 'success' : 'info');
+
+        } catch (error) {
+            console.error('Bot error:', error);
+            addBotLog('error', `Bot failed: ${error.message}`);
+            showToast('Bot error: ' + error.message, 'error');
+        } finally {
+            state.botRunning = false;
+            if (runBtn) runBtn.disabled = false;
+            if (dryBtn) dryBtn.disabled = false;
+            if (statusDot) statusDot.className = 'status-dot';
+            if (statusText) statusText.textContent = 'Idle';
+            updateBudgetDisplay();
+            renderPortfolio();
+        }
+    }
+
+    function addBotLog(type, message) {
+        const logEl = document.getElementById('botLog');
+        if (!logEl) return;
+
+        const time = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `bot-log-entry ${type}`;
+        entry.innerHTML = `<span class="time">${time}</span>${escapeHtml(message)}`;
+        logEl.appendChild(entry);
+        logEl.scrollTop = logEl.scrollHeight;
     }
 
     // ── Utilities ──────────────────────────────────────────

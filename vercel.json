@@ -27,5 +27,13 @@
       "src": "/(.*)",
       "dest": "/$1"
     }
-  ]
+  ],
+  "functions": {
+    "api/auto-trade.js": {
+      "maxDuration": 60
+    },
+    "api/analyze.js": {
+      "maxDuration": 30
+    }
+  }
 }
