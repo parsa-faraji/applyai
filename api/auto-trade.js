@@ -419,6 +419,7 @@ async function executeTrade(params) {
         market: market.question,
         marketId: market.id,
         outcome,
+        endDate: market.endDate || null,
         timestamp: new Date().toISOString(),
         auto: true,
     };

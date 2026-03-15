@@ -37,6 +37,7 @@
         autoTrade: false,
         stopLossPct: 30,
         takeProfitPct: 50,
+        trailingStopPct: 15,
         monitorInterval: 5,
         autoRescan: 0,
     };
@@ -125,10 +126,12 @@
 
         const stopLoss = document.getElementById('stopLossPct');
         const takeProfit = document.getElementById('takeProfitPct');
+        const trailingStop = document.getElementById('trailingStopPct');
         const monitorInt = document.getElementById('monitorInterval');
         const autoRescan = document.getElementById('autoRescan');
         if (stopLoss) stopLoss.value = s.stopLossPct || DEFAULTS.stopLossPct;
         if (takeProfit) takeProfit.value = s.takeProfitPct || DEFAULTS.takeProfitPct;
+        if (trailingStop) trailingStop.value = s.trailingStopPct || DEFAULTS.trailingStopPct;
         if (monitorInt) monitorInt.value = s.monitorInterval ?? DEFAULTS.monitorInterval;
         if (autoRescan) autoRescan.value = s.autoRescan ?? DEFAULTS.autoRescan;
     }
@@ -150,6 +153,7 @@
             autoTrade: document.getElementById('autoTrade')?.checked || false,
             stopLossPct: parseInt(document.getElementById('stopLossPct')?.value) || DEFAULTS.stopLossPct,
             takeProfitPct: parseInt(document.getElementById('takeProfitPct')?.value) || DEFAULTS.takeProfitPct,
+            trailingStopPct: parseInt(document.getElementById('trailingStopPct')?.value) || DEFAULTS.trailingStopPct,
             monitorInterval: parseInt(document.getElementById('monitorInterval')?.value ?? DEFAULTS.monitorInterval),
             autoRescan: parseInt(document.getElementById('autoRescan')?.value ?? DEFAULTS.autoRescan),
         };
@@ -891,7 +895,7 @@
                 state.positions.unshift({
                     marketId: market.id, market: market.question, outcome: trade.outcome,
                     shares: trade.shares, cost: amount, avgPrice: price, currentPrice: price,
-                    tokenId, timestamp: trade.timestamp,
+                    tokenId, timestamp: trade.timestamp, endDate: market.endDate || null,
                 });
             }
             localStorage.setItem('pb_positions', JSON.stringify(state.positions));
@@ -1153,6 +1157,7 @@
                             marketId: trade.marketId, market: trade.market, outcome: trade.outcome,
                             shares: trade.shares, cost: trade.amount, avgPrice: trade.price,
                             currentPrice: trade.price, tokenId: trade.tokenId, timestamp: trade.timestamp,
+                            endDate: trade.endDate || null,
                         });
                     }
                 }
@@ -1216,7 +1221,7 @@
         document.getElementById('startMonitorBtn').style.display = 'none';
         document.getElementById('stopMonitorBtn').style.display = '';
 
-        addBotLog('info', `Monitor started — checking every ${intervalMin}min (SL: ${state.settings.stopLossPct || DEFAULTS.stopLossPct}%, TP: ${state.settings.takeProfitPct || DEFAULTS.takeProfitPct}%)`);
+        addBotLog('info', `Monitor started — checking every ${intervalMin}min (SL: ${state.settings.stopLossPct || DEFAULTS.stopLossPct}%, TP: ${state.settings.takeProfitPct || DEFAULTS.takeProfitPct}%, Trail: ${state.settings.trailingStopPct || DEFAULTS.trailingStopPct}%)`);
 
         runMonitorCheck(); // immediate first check
         state.monitorId = setInterval(runMonitorCheck, intervalMin * 60 * 1000);
@@ -1260,6 +1265,7 @@
                     positions: state.positions,
                     stopLossPct: state.settings.stopLossPct || DEFAULTS.stopLossPct,
                     takeProfitPct: state.settings.takeProfitPct || DEFAULTS.takeProfitPct,
+                    trailingStopPct: state.settings.trailingStopPct || DEFAULTS.trailingStopPct,
                     spikeThreshold: 15,
                 }),
             });
@@ -1274,6 +1280,8 @@
                     if (state.positions[i] && updated.currentPrice != null) {
                         state.positions[i].currentPrice = updated.currentPrice;
                         if (updated.spikeAlerted) state.positions[i].spikeAlerted = true;
+                        if (updated.highWaterPrice) state.positions[i].highWaterPrice = updated.highWaterPrice;
+                        if (updated.momentum) state.positions[i].momentum = updated.momentum;
                     }
                 });
                 localStorage.setItem('pb_positions', JSON.stringify(state.positions));

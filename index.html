@@ -245,6 +245,11 @@
                             <span class="form-hint">Auto-exit if position gains this much (default 50%)</span>
                         </div>
                         <div class="form-group">
+                            <label for="trailingStopPct">Trailing Stop (%)</label>
+                            <input type="number" id="trailingStopPct" class="form-input" value="15" min="5" max="50">
+                            <span class="form-hint">If price drops this much from its peak, sell to lock in profits (default 15%)</span>
+                        </div>
+                        <div class="form-group">
                             <label for="monitorInterval">Monitor Interval (minutes)</label>
                             <select id="monitorInterval" class="form-input">
                                 <option value="1">Every 1 minute</option>
