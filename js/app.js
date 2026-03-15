@@ -102,6 +102,7 @@
         const s = state.settings;
         const fields = {
             anthropicKey: s.anthropicKey,
+            braveApiKey: s.braveApiKey,
             polyApiKey: s.polyApiKey,
             polySecret: s.polySecret,
             polyPassphrase: s.polyPassphrase,
@@ -138,6 +139,7 @@
 
         state.settings = {
             anthropicKey: document.getElementById('anthropicKey')?.value || '',
+            braveApiKey: document.getElementById('braveApiKey')?.value || '',
             polyApiKey: document.getElementById('polyApiKey')?.value || '',
             polySecret: document.getElementById('polySecret')?.value || '',
             polyPassphrase: document.getElementById('polyPassphrase')?.value || '',
@@ -667,6 +669,7 @@
         try {
             const headers = { 'Content-Type': 'application/json' };
             if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
 
             const resp = await fetch('/api/analyze', {
                 method: 'POST',
@@ -1098,6 +1101,7 @@
         try {
             const headers = { 'Content-Type': 'application/json' };
             if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
             if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
             if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
             if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;

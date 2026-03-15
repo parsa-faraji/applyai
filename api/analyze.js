@@ -1,5 +1,7 @@
 // Vercel Serverless Function — Claude market analysis with live context
-// Fetches real-time order book, price history, and market data before asking Claude
+// Fetches real-time order book, price history, news, and related markets before asking Claude
+
+import { searchNews } from './lib/search.js';
 
 export const config = {
     maxDuration: 30,
@@ -8,7 +10,7 @@ export const config = {
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Anthropic-Key');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Anthropic-Key, X-Brave-Key');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -30,19 +32,40 @@ export default async function handler(req, res) {
         const outcomes = parseJson(market.outcomes, []);
         const tokens = parseJson(market.clobTokenIds, []);
 
-        // Fetch live context in parallel: order book + price history for YES token
+        // Fetch live context in parallel: order book + price history + news
         const yesTokenId = tokens[0] || '';
         let liveContext = {};
 
+        const searchKeys = {
+            braveKey: req.headers['x-brave-key'] || process.env.BRAVE_API_KEY || '',
+            googleKey: process.env.GOOGLE_SEARCH_KEY || '',
+            googleCx: process.env.GOOGLE_CX || '',
+        };
+
+        // Fetch all context in parallel
+        const contextPromises = [];
+
         if (yesTokenId) {
-            const [orderBook, priceHistory] = await Promise.all([
+            contextPromises.push(
                 fetchSafe(`https://clob.polymarket.com/book?token_id=${yesTokenId}`)
-                    .then(summarizeOrderBook),
+                    .then(summarizeOrderBook)
+                    .then(ob => { liveContext.orderBook = ob; })
+            );
+            contextPromises.push(
                 fetchSafe(`https://clob.polymarket.com/prices-history?market=${yesTokenId}&startTs=${Math.floor(Date.now() / 1000) - 86400}&endTs=${Math.floor(Date.now() / 1000)}&fidelity=60`)
-                    .then(analyzePriceHistory),
-            ]);
-            liveContext = { orderBook, priceHistory };
+                    .then(analyzePriceHistory)
+                    .then(ph => { liveContext.priceHistory = ph; })
+            );
         }
+
+        // Always search for news (uses free Polymarket search as fallback)
+        contextPromises.push(
+            searchNews(market.question, searchKeys)
+                .then(news => { liveContext.news = news; })
+                .catch(() => { liveContext.news = null; })
+        );
+
+        await Promise.all(contextPromises);
 
         // Build enriched prompt
         const outcomeSummary = outcomes.map((name, i) => {
@@ -82,6 +105,15 @@ export default async function handler(req, res) {
 `;
         }
 
+        // News section
+        if (liveContext.news && liveContext.news.headlines?.length > 0) {
+            const news = liveContext.news;
+            liveDataSection += `
+## Recent News & Context (${news.provider || 'web search'})
+${news.headlines.map((h, i) => `- **${h}**${news.snippets[i] ? ` — ${news.snippets[i]}` : ''}${news.sources[i] ? ` (${news.sources[i]})` : ''}`).join('\n')}
+`;
+        }
+
         const prompt = `You are an expert prediction market trader. Analyze this Polymarket market using BOTH the static market info AND the live trading data below.
 
 ## Market Information
@@ -99,12 +131,21 @@ ${liveDataSection}
 ## Risk Tolerance
 ${riskInstructions[riskLevel] || riskInstructions.moderate}
 
+## Calibration Rules (CRITICAL)
+- You are NOT omniscient. Prediction markets aggregate thousands of informed traders. The market price is usually close to correct.
+- To find edge, you need SPECIFIC INFORMATION the market hasn't priced in — recent news, a detail in the resolution criteria, or a logical error in how traders are interpreting the question.
+- If you don't see a clear, articulable reason the market is wrong, recommend HOLD. "I think X is more likely" without evidence is NOT edge.
+- High-volume, high-liquidity markets are the hardest to beat. The more traders, the more efficient the price.
+- Base rates matter: "How often does X happen historically?" is more useful than gut feeling.
+- If recent news strongly supports one side, check whether the price already moved — the market may have already priced it in.
+- Be honest about your uncertainty. Saying "I don't know" is better than a bad trade.
+
 ## Your Task
-1. **Analyze** the question — what are the key factors and evidence for each outcome?
-2. **Read the tape** — what does the price action, momentum, and order book tell you? Is smart money moving in one direction? Is the spread wide (uncertain) or tight (consensus)?
-3. **Estimate** your own probability for each outcome based on current knowledge
-4. **Compare** your estimate vs the market price — is there an edge?
-5. **Recommend** a specific action, factoring in: the spread cost, slippage risk from order book depth, and recent momentum
+1. **Read the news** — does any recent information change the probability vs what was known when the market price was set?
+2. **Read the tape** — what does the price action, momentum, and order book tell you? Is smart money moving in one direction?
+3. **Estimate** your own probability, anchoring on the market price and adjusting ONLY if you have specific evidence
+4. **Compare** your estimate vs the market price — is there genuine edge, or are you just disagreeing without evidence?
+5. **Recommend** HOLD unless you have a clear, evidence-backed reason the market is wrong
 
 ## Response Format
 Respond with this exact structure:
@@ -112,19 +153,23 @@ Respond with this exact structure:
 ### Key Factors
 [2-4 bullet points on what drives this outcome]
 
+### News & Context
+[What does the recent news tell you? Has this information already been priced in? Any new developments?]
+
 ### Live Data Read
 [What the order book and price action tell you — is this market efficient? Where is the smart money? Any unusual patterns?]
 
 ### Probability Estimate
-[Your estimated probability for each outcome, with brief reasoning]
+[Your estimated probability for each outcome. Start from the market price and explain what specific evidence moves you away from it — or why the market is correct.]
 
 ### Market Edge
-[Where you see mispricing, if any — account for the spread and execution costs]
+[Where you see mispricing, if any — account for the spread and execution costs. Be specific about WHY the market is wrong, not just that you disagree.]
 
 ### Recommendation
 **Action:** [BUY YES / BUY NO / HOLD — no trade]
 **Confidence:** [Low / Medium / High]
-**Reasoning:** [1-2 sentences on why]
+**Edge:** [Estimated edge in percentage points, AFTER spread costs, or 0 if HOLD]
+**Reasoning:** [1-2 sentences citing specific evidence]
 **Suggested Size:** [Small (5-10%) / Medium (15-25%) / Large (30-50%) of max position]`;
 
         const response = await fetch('https://api.anthropic.com/v1/messages', {

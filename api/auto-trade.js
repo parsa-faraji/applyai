@@ -8,6 +8,7 @@
 
 import { ethers } from 'ethers';
 import { buildMarketOrder, signOrder, submitOrder, getMidpoint } from './lib/clob.js';
+import { searchNews } from './lib/search.js';
 
 export const config = {
     maxDuration: 60,
@@ -16,7 +17,7 @@ export const config = {
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Anthropic-Key, X-Poly-Api-Key, X-Poly-Secret, X-Poly-Passphrase, X-Poly-Private-Key');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Anthropic-Key, X-Brave-Key, X-Poly-Api-Key, X-Poly-Secret, X-Poly-Passphrase, X-Poly-Private-Key');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -81,10 +82,21 @@ export default async function handler(req, res) {
             if (budgetLeft < 1 || report.tradesExecuted >= maxTradesPerRun) break;
 
             try {
-                // Fetch live context before analysis
+                // Fetch live context + news before analysis
                 const tokens = parseJsonSafe(market.clobTokenIds, []);
                 const yesTokenId = tokens[0] || '';
-                const liveContext = yesTokenId ? await fetchLiveContext(yesTokenId) : {};
+
+                const searchKeys = {
+                    braveKey: req.headers['x-brave-key'] || process.env.BRAVE_API_KEY || '',
+                    googleKey: process.env.GOOGLE_SEARCH_KEY || '',
+                    googleCx: process.env.GOOGLE_CX || '',
+                };
+
+                const [liveContext, newsContext] = await Promise.all([
+                    yesTokenId ? fetchLiveContext(yesTokenId) : Promise.resolve({}),
+                    searchNews(market.question, searchKeys).catch(() => null),
+                ]);
+                liveContext.news = newsContext;
 
                 const analysis = await analyzeWithClaude(market, anthropicKey, riskLevel, budgetLeft, maxPerTrade, liveContext);
                 report.marketsAnalyzed++;
@@ -275,7 +287,14 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
 - Momentum: ${ph.momentum} | Volatility: ${ph.volatility < 0.02 ? 'low' : ph.volatility < 0.05 ? 'moderate' : 'high'}`;
     }
 
-    const prompt = `You are an autonomous prediction market trading bot managing $${budgetLeft.toFixed(0)} remaining (max $${maxPerTrade}/trade). Analyze this market using the live data.
+    // News section
+    const news = liveContext?.news;
+    if (news && news.headlines?.length > 0) {
+        liveSection += `\n## Recent News
+${news.headlines.map((h, i) => `- ${h}${news.snippets?.[i] ? ': ' + news.snippets[i] : ''}`).join('\n')}`;
+    }
+
+    const prompt = `You are an autonomous prediction market trading bot managing $${budgetLeft.toFixed(0)} remaining (max $${maxPerTrade}/trade). Analyze this market using the live data AND recent news.
 
 ## Market
 **Question:** ${market.question}
@@ -287,10 +306,17 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
 ${outcomeSummary}
 ${liveSection}
 
+## Calibration
+- The market price reflects thousands of informed traders. It is usually approximately correct.
+- Only trade when you have SPECIFIC evidence (from news, data, or logic) that the market is wrong.
+- "I think X is more likely" without evidence is NOT edge. Recommend HOLD.
+- If news supports one side, the price may have ALREADY moved — check the 24h change.
+- High-volume markets are the hardest to beat. Be honest about uncertainty.
+
 ## Rules
 ${riskMap[riskLevel] || riskMap.moderate}
-- You MUST be selective. Only trade when you see genuine mispricing.
-- Factor in: spread cost, order book depth (can you fill without moving the market?), and momentum direction.
+- You MUST be selective. Only trade when you see genuine mispricing backed by evidence.
+- Factor in: spread cost, order book depth, momentum, and whether news is already priced in.
 - If the spread is >3%, that eats into your edge — account for it.
 - If momentum conflicts with your thesis, reduce confidence.
 
