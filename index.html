@@ -3,198 +3,201 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ApplyAI - Tailored Job Applications in Seconds</title>
+    <title>PredictBot — AI-Powered Prediction Market Trading</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-    <nav class="nav">
-        <div class="nav-container">
-            <a href="/" class="logo">ApplyAI</a>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="logo">
+                <span class="logo-icon">&#9670;</span>
+                <span class="logo-text">PredictBot</span>
+            </div>
             <div class="nav-links">
-                <a href="#how-it-works">How it works</a>
-                <a href="#pricing">Pricing</a>
-                <a href="#app" class="btn btn-primary">Get Started</a>
+                <a href="#" class="nav-link active" data-view="markets">Markets</a>
+                <a href="#" class="nav-link" data-view="portfolio">Portfolio</a>
+                <a href="#" class="nav-link" data-view="settings">Settings</a>
+            </div>
+            <div class="nav-status">
+                <span class="status-dot" id="apiStatus"></span>
+                <span class="status-text" id="apiStatusText">Connecting...</span>
             </div>
         </div>
     </nav>
 
-    <section class="hero">
-        <div class="hero-container">
-            <div class="hero-badge">Stop wasting hours on applications</div>
-            <h1>Tailored resumes & cover letters in <span class="highlight">10 seconds</span></h1>
-            <p class="hero-sub">Paste a job posting. Get a perfectly customized application. Land more interviews.</p>
-            <div class="hero-cta">
-                <a href="#app" class="btn btn-primary btn-lg">Try it free</a>
-                <span class="hero-note">No signup required</span>
-            </div>
-            <div class="hero-stats">
-                <div class="stat-item">
-                    <span class="stat-num">3,240+</span>
-                    <span class="stat-label">Applications generated</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-num">67%</span>
-                    <span class="stat-label">More interviews</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-num">2 min</span>
-                    <span class="stat-label">Avg. time saved per app</span>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section id="how-it-works" class="how-it-works">
-        <div class="container">
-            <h2>How it works</h2>
-            <div class="steps">
-                <div class="step">
-                    <div class="step-num">1</div>
-                    <h3>Paste the job posting</h3>
-                    <p>Copy the job description or just paste the URL. We extract all the key requirements.</p>
-                </div>
-                <div class="step">
-                    <div class="step-num">2</div>
-                    <h3>Upload your resume</h3>
-                    <p>Drop your existing resume. PDF, DOCX, or just paste the text.</p>
-                </div>
-                <div class="step">
-                    <div class="step-num">3</div>
-                    <h3>Get tailored content</h3>
-                    <p>AI rewrites your resume to match the job + generates a personalized cover letter.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section id="app" class="app-section">
-        <div class="container">
-            <div class="app-container">
-                <div class="app-input">
-                    <h2>Generate your application</h2>
-
-                    <div class="input-group">
-                        <label for="job-input">Job Description</label>
-                        <textarea id="job-input" placeholder="Paste the job description or URL here..."></textarea>
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Markets View -->
+        <section id="marketsView" class="view active">
+            <div class="markets-layout">
+                <!-- Left Panel: Markets List -->
+                <div class="panel markets-panel">
+                    <div class="panel-header">
+                        <h2>Live Markets</h2>
+                        <div class="market-filters">
+                            <input type="text" id="marketSearch" class="search-input" placeholder="Search markets...">
+                            <select id="marketSort" class="filter-select">
+                                <option value="volume">By Volume</option>
+                                <option value="newest">Newest</option>
+                                <option value="ending">Ending Soon</option>
+                                <option value="liquidity">By Liquidity</option>
+                            </select>
+                        </div>
                     </div>
+                    <div id="marketsList" class="markets-list">
+                        <div class="loading-state">
+                            <span class="loading-spinner"></span>
+                            Loading markets...
+                        </div>
+                    </div>
+                    <div class="markets-pagination">
+                        <button class="btn btn-sm" id="loadMoreBtn" style="display:none;">Load More Markets</button>
+                    </div>
+                </div>
 
-                    <div class="input-group">
-                        <label for="resume-input">Your Resume</label>
-                        <textarea id="resume-input" placeholder="Paste your current resume here..."></textarea>
-                        <div class="file-upload" id="file-upload">
-                            <span>or drop a file here</span>
-                            <input type="file" id="file-input" accept=".pdf,.doc,.docx,.txt">
+                <!-- Right Panel: Analysis + Trading -->
+                <div class="right-panels">
+                    <!-- Market Detail -->
+                    <div class="panel detail-panel" id="marketDetail">
+                        <div class="empty-state">
+                            <span class="empty-icon">&#9670;</span>
+                            <p>Select a market to view details and get Claude's analysis</p>
                         </div>
                     </div>
 
-                    <button class="btn btn-primary btn-lg btn-full" id="generate-btn">
-                        <span class="btn-text">Generate Tailored Application</span>
-                        <span class="btn-loading" style="display:none;">Analyzing...</span>
-                    </button>
-                </div>
-
-                <div class="app-output" id="output-section" style="display:none;">
-                    <div class="output-tabs">
-                        <button class="tab active" data-tab="resume">Tailored Resume</button>
-                        <button class="tab" data-tab="cover">Cover Letter</button>
-                        <button class="tab" data-tab="tips">Interview Tips</button>
+                    <!-- Claude Analysis -->
+                    <div class="panel analysis-panel" id="analysisPanel">
+                        <div class="panel-header">
+                            <h2>Claude's Analysis</h2>
+                            <button class="btn btn-primary btn-sm" id="analyzeBtn" disabled>Analyze Market</button>
+                        </div>
+                        <div id="analysisContent" class="analysis-content">
+                            <div class="empty-state small">
+                                <p>Select a market and click "Analyze" for Claude's trading recommendation</p>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="output-content">
-                        <div class="tab-content active" id="resume-content"></div>
-                        <div class="tab-content" id="cover-content"></div>
-                        <div class="tab-content" id="tips-content"></div>
-                    </div>
-
-                    <div class="output-actions">
-                        <button class="btn btn-secondary" id="copy-btn">Copy to clipboard</button>
-                        <button class="btn btn-secondary" id="download-btn">Download as PDF</button>
+                    <!-- Trading Panel -->
+                    <div class="panel trading-panel" id="tradingPanel">
+                        <div class="panel-header">
+                            <h2>Place Trade</h2>
+                        </div>
+                        <div id="tradingContent" class="trading-content">
+                            <div class="empty-state small">
+                                <p>Select a market to trade</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <section id="pricing" class="pricing">
-        <div class="container">
-            <h2>Simple pricing</h2>
-            <p class="pricing-sub">Start free. Upgrade when you're ready.</p>
-
-            <div class="pricing-cards">
-                <div class="pricing-card">
-                    <div class="pricing-header">
-                        <h3>Free</h3>
-                        <div class="price">$0</div>
+        <!-- Portfolio View -->
+        <section id="portfolioView" class="view">
+            <div class="portfolio-layout">
+                <div class="panel portfolio-summary">
+                    <h2>Portfolio Overview</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">Total Invested</span>
+                            <span class="stat-value" id="totalInvested">$0.00</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Current Value</span>
+                            <span class="stat-value" id="currentValue">$0.00</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Total P&L</span>
+                            <span class="stat-value" id="totalPnl">$0.00</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Win Rate</span>
+                            <span class="stat-value" id="winRate">&mdash;</span>
+                        </div>
                     </div>
-                    <ul class="pricing-features">
-                        <li>3 applications per month</li>
-                        <li>Basic resume tailoring</li>
-                        <li>Cover letter generation</li>
-                    </ul>
-                    <a href="#app" class="btn btn-secondary btn-full">Get started</a>
                 </div>
-
-                <div class="pricing-card featured">
-                    <div class="pricing-badge">Most popular</div>
-                    <div class="pricing-header">
-                        <h3>Pro</h3>
-                        <div class="price">$12<span>/month</span></div>
+                <div class="panel">
+                    <h2>Active Positions</h2>
+                    <div id="activePositions" class="positions-list">
+                        <div class="empty-state small"><p>No active positions. Start trading to build your portfolio.</p></div>
                     </div>
-                    <ul class="pricing-features">
-                        <li>Unlimited applications</li>
-                        <li>Advanced AI tailoring</li>
-                        <li>Interview prep tips</li>
-                        <li>Application tracker</li>
-                        <li>Priority support</li>
-                    </ul>
-                    <a href="#app" class="btn btn-primary btn-full">Start free trial</a>
                 </div>
-
-                <div class="pricing-card">
-                    <div class="pricing-header">
-                        <h3>Pay per use</h3>
-                        <div class="price">$2<span>/application</span></div>
+                <div class="panel">
+                    <h2>Trade History</h2>
+                    <div id="tradeHistory" class="trade-history">
+                        <div class="empty-state small"><p>No trades yet.</p></div>
                     </div>
-                    <ul class="pricing-features">
-                        <li>No commitment</li>
-                        <li>Full features per use</li>
-                        <li>Buy credits in bulk</li>
-                    </ul>
-                    <a href="#app" class="btn btn-secondary btn-full">Buy credits</a>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <section class="cta-section">
-        <div class="container">
-            <h2>Stop sending generic applications</h2>
-            <p>Join thousands of job seekers landing more interviews with tailored applications.</p>
-            <a href="#app" class="btn btn-primary btn-lg">Generate your first application</a>
-        </div>
-    </section>
-
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-brand">
-                    <span class="logo">ApplyAI</span>
-                    <p>Tailored job applications in seconds.</p>
+        <!-- Settings View -->
+        <section id="settingsView" class="view">
+            <div class="settings-layout">
+                <div class="panel">
+                    <h2>API Configuration</h2>
+                    <p class="settings-note">Keys are stored in your browser's localStorage and sent only to your Vercel backend.</p>
+                    <div class="settings-form">
+                        <div class="form-group">
+                            <label for="anthropicKey">Anthropic API Key</label>
+                            <input type="password" id="anthropicKey" class="form-input" placeholder="sk-ant-...">
+                            <span class="form-hint">Powers Claude's market analysis</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="polyApiKey">Polymarket API Key</label>
+                            <input type="password" id="polyApiKey" class="form-input" placeholder="Your CLOB API key">
+                            <span class="form-hint">Required to execute trades via the CLOB API</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="polySecret">Polymarket API Secret</label>
+                            <input type="password" id="polySecret" class="form-input" placeholder="Your API secret">
+                        </div>
+                        <div class="form-group">
+                            <label for="polyPassphrase">Polymarket Passphrase</label>
+                            <input type="password" id="polyPassphrase" class="form-input" placeholder="Your passphrase">
+                        </div>
+                    </div>
                 </div>
-                <div class="footer-links">
-                    <a href="#">Privacy</a>
-                    <a href="#">Terms</a>
-                    <a href="#">Contact</a>
+                <div class="panel">
+                    <h2>Trading Preferences</h2>
+                    <div class="settings-form">
+                        <div class="form-group">
+                            <label for="maxPositionSize">Max Position Size (USDC)</label>
+                            <input type="number" id="maxPositionSize" class="form-input" value="50" min="1" max="10000">
+                        </div>
+                        <div class="form-group">
+                            <label for="riskLevel">Risk Tolerance</label>
+                            <select id="riskLevel" class="form-input">
+                                <option value="conservative">Conservative — only high-confidence trades</option>
+                                <option value="moderate" selected>Moderate</option>
+                                <option value="aggressive">Aggressive — act on all recommendations</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Auto-Trade Mode</label>
+                            <div class="toggle-group">
+                                <input type="checkbox" id="autoTrade" class="toggle-input">
+                                <label for="autoTrade" class="toggle-label">Execute Claude's recommendations automatically</label>
+                            </div>
+                            <span class="form-hint warning">Caution: trades will execute without confirmation when enabled</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-actions">
+                    <button class="btn btn-primary" id="saveSettings">Save Settings</button>
+                    <button class="btn btn-secondary" id="clearData">Clear All Data</button>
                 </div>
             </div>
-            <div class="footer-bottom">
-                <p>&copy; 2025 ApplyAI. All rights reserved.</p>
-            </div>
-        </div>
-    </footer>
+        </section>
+    </main>
 
-    <script src="js/app.js"></script>
+    <!-- Toast container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/js/app.js"></script>
 </body>
 </html>

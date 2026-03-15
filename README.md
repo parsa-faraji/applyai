@@ -1,110 +1,77 @@
-# ApplyAI
+# PredictBot — AI-Powered Prediction Market Trading
 
-AI-powered job application generator. Paste a job posting, get a perfectly tailored resume, cover letter, and interview prep in seconds.
+A web app that uses Claude to analyze Polymarket prediction markets and execute trades on your behalf.
 
 ## Features
 
-- **Tailored Resume** - AI rewrites your resume to match job requirements and pass ATS
-- **Cover Letter** - Personalized cover letters that highlight relevant experience
-- **Interview Tips** - Specific questions and talking points for each application
-- **Resume Memory** - Saves your resume locally for quick reuse
-- **Usage Tracking** - Track your application generation history
+- **Live Markets** — Browse active Polymarket markets with real-time prices and volume
+- **Claude Analysis** — Get AI-powered market analysis and trading recommendations
+- **One-Click Trading** — Execute trades directly from the dashboard
+- **Portfolio Tracking** — Monitor your positions, P&L, and trade history
+- **Auto-Trade Mode** — Let Claude automatically execute its recommendations
+- **Risk Controls** — Configurable position sizes and risk tolerance levels
 
-## Tech Stack
+## Architecture
 
-- Vanilla JavaScript (no framework bloat)
-- Vercel Serverless Functions
-- OpenAI GPT-4o-mini API
-- Pure CSS
-
-## Quick Start
-
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/parsa-faraji/applyai.git
-cd applyai
+```
+Frontend (Vanilla JS)  →  Vercel Serverless Functions  →  Polymarket Gamma API
+                                                       →  Anthropic Claude API
+                                                       →  Polymarket CLOB API
 ```
 
-### 2. Install Vercel CLI
+## API Endpoints
 
-```bash
-npm i -g vercel
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/markets` | GET | Proxy to Polymarket Gamma API for market data |
+| `/api/analyze` | POST | Send market data to Claude for analysis |
+| `/api/trade` | POST | Execute trades via Polymarket CLOB API |
 
-### 3. Set up environment variables
+## Setup
 
-```bash
-vercel env add OPENAI_API_KEY
-# Enter your OpenAI API key when prompted
-```
+1. Clone and install:
+   ```bash
+   npm install
+   ```
 
-### 4. Deploy
+2. Set environment variables (or configure in the app's Settings page):
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   POLYMARKET_API_KEY=...
+   POLYMARKET_API_SECRET=...
+   POLYMARKET_PASSPHRASE=...
+   ```
 
-```bash
-vercel --prod
-```
+3. Run locally:
+   ```bash
+   npm run dev
+   ```
 
-## Local Development
+4. Deploy:
+   ```bash
+   npm run deploy
+   ```
 
-```bash
-# Set environment variable locally
-export OPENAI_API_KEY=your_key_here
+## Configuration
 
-# Run local dev server
-vercel dev
-```
+All settings can be configured in the app's Settings page:
 
-Open http://localhost:3000
+- **API Keys** — Anthropic and Polymarket credentials
+- **Max Position Size** — Maximum USDC per trade
+- **Risk Tolerance** — Conservative / Moderate / Aggressive
+- **Auto-Trade** — Automatically execute Claude's recommendations
 
-## Environment Variables
+## How It Works
 
-| Variable | Description |
-|----------|-------------|
-| `OPENAI_API_KEY` | Your OpenAI API key (get one at platform.openai.com) |
+1. Markets are fetched from Polymarket's Gamma API
+2. Select a market and click "Analyze" to get Claude's take
+3. Claude evaluates the question, estimates probabilities, and identifies mispricings
+4. Place trades directly or enable auto-trade for hands-free operation
+5. Track your portfolio performance over time
 
-## API Endpoint
+## Disclaimer
 
-`POST /api/generate`
-
-**Request Body:**
-```json
-{
-  "jobDescription": "Full job posting text...",
-  "resume": "Your current resume text...",
-  "type": "resume" | "cover" | "tips"
-}
-```
-
-**Response:**
-```json
-{
-  "content": "Generated content...",
-  "usage": { "prompt_tokens": 500, "completion_tokens": 800 }
-}
-```
-
-## Costs
-
-Using GPT-4o-mini:
-- ~$0.002 per application (3 API calls)
-- 1000 applications ≈ $2
-
-## Monetization Ideas
-
-1. **Freemium** - 3 free/month, then $12/month unlimited
-2. **Pay-per-use** - $2 per application
-3. **Credits** - Buy 10 for $15, 50 for $50
-4. **B2B** - Sell to career services, bootcamps, universities
-
-## Roadmap
-
-- [ ] PDF resume parsing
-- [ ] Application tracker dashboard
-- [ ] Chrome extension for LinkedIn
-- [ ] Email follow-up generator
-- [ ] Stripe integration for payments
-- [ ] User accounts with Supabase
+This is an experimental trading tool. Prediction market trading involves risk of loss. Use at your own risk. Not financial advice.
 
 ## License
 

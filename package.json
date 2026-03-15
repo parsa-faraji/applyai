@@ -1,19 +1,18 @@
 {
-  "name": "applyai",
+  "name": "predictbot",
   "version": "1.0.0",
-  "description": "AI-powered job application generator - tailored resumes and cover letters in seconds",
+  "description": "AI-powered prediction market trading bot — Claude analyzes Polymarket markets and trades for you",
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
     "deploy:preview": "vercel"
   },
   "keywords": [
-    "ai",
-    "resume",
-    "job-application",
-    "cover-letter",
-    "openai",
-    "career"
+    "prediction-markets",
+    "polymarket",
+    "claude",
+    "ai-trading",
+    "anthropic"
   ],
   "author": "Parsa Faraji Alamouti",
   "license": "MIT"
