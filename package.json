@@ -1,9 +1,11 @@
 {
   "name": "predictbot",
   "version": "1.0.0",
-  "description": "AI-powered prediction market trading bot — Claude analyzes Polymarket markets and trades for you",
+  "type": "module",
+  "description": "AI-powered prediction market trading bot — Claude analyzes Kalshi + Polymarket markets and trades for you",
   "scripts": {
-    "dev": "vercel dev",
+    "start": "node server.js",
+    "dev": "node server.js",
     "deploy": "vercel --prod",
     "deploy:preview": "vercel"
   },
