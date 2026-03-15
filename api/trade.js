@@ -1,6 +1,7 @@
 // Vercel Serverless Function — Real trade execution via Polymarket CLOB
 // Signs EIP-712 orders and submits them to the CLOB API
 
+import { ethers } from 'ethers';
 import { buildMarketOrder, signOrder, submitOrder, getMidpoint } from './lib/clob.js';
 
 export default async function handler(req, res) {
@@ -70,7 +71,8 @@ async function executeLiveTrade(req, res, params) {
         const signed = await signOrder(order, privateKey, negRisk || false);
 
         // Submit to CLOB
-        const result = await submitOrder(signed, apiKey, apiSecret, passphrase);
+        const signerAddress = new ethers.Wallet(privateKey).address;
+        const result = await submitOrder(signed, apiKey, apiSecret, passphrase, signerAddress);
 
         const shares = parseFloat(amount) / tradePrice;
 

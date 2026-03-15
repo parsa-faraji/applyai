@@ -85,6 +85,10 @@
         const loadMoreBtn = document.getElementById('loadMoreBtn');
         if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMoreMarkets);
 
+        // Derive keys button
+        const deriveKeysBtn = document.getElementById('deriveKeysBtn');
+        if (deriveKeysBtn) deriveKeysBtn.addEventListener('click', deriveApiKeys);
+
         // Bot controls
         const runBotBtn = document.getElementById('runBotBtn');
         if (runBotBtn) runBotBtn.addEventListener('click', () => runBot(false));
@@ -145,6 +149,45 @@
 
         showToast('Settings saved', 'success');
         checkApiStatus();
+    }
+
+    async function deriveApiKeys() {
+        const privateKey = document.getElementById('polyPrivateKey')?.value;
+        if (!privateKey || privateKey.length < 10) {
+            showToast('Enter your wallet private key first', 'error');
+            return;
+        }
+
+        const btn = document.getElementById('deriveKeysBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Deriving...'; }
+
+        try {
+            const resp = await fetch('/api/derive-keys', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Poly-Private-Key': privateKey,
+                },
+            });
+
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'Failed to derive keys');
+
+            const creds = data.credentials;
+            if (creds) {
+                const keyEl = document.getElementById('polyApiKey');
+                const secretEl = document.getElementById('polySecret');
+                const passEl = document.getElementById('polyPassphrase');
+                if (keyEl && creds.apiKey) keyEl.value = creds.apiKey;
+                if (secretEl && creds.secret) secretEl.value = creds.secret;
+                if (passEl && creds.passphrase) passEl.value = creds.passphrase;
+                showToast('API credentials derived! Click Save Settings.', 'success');
+            }
+        } catch (error) {
+            showToast('Derive failed: ' + error.message, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Derive Keys'; }
+        }
     }
 
     function clearAllData() {

@@ -902,6 +902,16 @@ body {
     color: var(--text-secondary);
 }
 
+.input-with-action {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.input-with-action .form-input {
+    flex: 1;
+}
+
 .settings-actions {
     display: flex;
     gap: 12px;

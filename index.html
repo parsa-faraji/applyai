@@ -177,8 +177,11 @@
                         </div>
                         <div class="form-group">
                             <label for="polyApiKey">Polymarket API Key</label>
-                            <input type="password" id="polyApiKey" class="form-input" placeholder="Your CLOB API key">
-                            <span class="form-hint">Required to execute trades via the CLOB API</span>
+                            <div class="input-with-action">
+                                <input type="password" id="polyApiKey" class="form-input" placeholder="Your CLOB API key">
+                                <button class="btn btn-sm" id="deriveKeysBtn" title="Auto-generate from wallet key">Derive Keys</button>
+                            </div>
+                            <span class="form-hint">Required for live trades. Click "Derive Keys" to auto-generate from your wallet.</span>
                         </div>
                         <div class="form-group">
                             <label for="polySecret">Polymarket API Secret</label>

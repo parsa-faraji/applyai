@@ -7,6 +7,7 @@
 // 4. Executes trades on recommendations that meet confidence thresholds
 // 5. Tracks budget and returns a full report
 
+import { ethers } from 'ethers';
 import { buildMarketOrder, signOrder, submitOrder, getMidpoint } from './lib/clob.js';
 
 export const config = {
@@ -311,7 +312,8 @@ async function executeTrade(params) {
             });
 
             const signed = await signOrder(order, polyPrivateKey, negRisk);
-            const result = await submitOrder(signed, polyApiKey, polySecret, polyPassphrase);
+            const signerAddress = new ethers.Wallet(polyPrivateKey).address;
+            const result = await submitOrder(signed, polyApiKey, polySecret, polyPassphrase, signerAddress);
 
             tradeRecord.status = result.status || 'submitted';
             tradeRecord.live = true;
