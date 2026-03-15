@@ -174,6 +174,14 @@
                     <p class="settings-note">Keys are stored in your browser's localStorage and sent only to your Vercel backend.</p>
                     <div class="settings-form">
                         <div class="form-group">
+                            <label for="exchange">Exchange</label>
+                            <select id="exchange" class="form-input">
+                                <option value="polymarket">Polymarket (crypto, global)</option>
+                                <option value="kalshi">Kalshi (US-regulated, CFTC)</option>
+                            </select>
+                            <span class="form-hint">Choose your prediction market exchange</span>
+                        </div>
+                        <div class="form-group">
                             <label for="anthropicKey">Anthropic API Key</label>
                             <input type="password" id="anthropicKey" class="form-input" placeholder="sk-ant-...">
                             <span class="form-hint">Powers Claude's market analysis</span>
@@ -181,8 +189,25 @@
                         <div class="form-group">
                             <label for="braveApiKey">Brave Search API Key (optional)</label>
                             <input type="password" id="braveApiKey" class="form-input" placeholder="BSA...">
-                            <span class="form-hint">For live news context. Free at search.brave.com/api. Falls back to Polymarket search if empty.</span>
+                            <span class="form-hint">For live news context. Free at search.brave.com/api. Falls back to search if empty.</span>
                         </div>
+
+                        <!-- Kalshi credentials (shown when Kalshi selected) -->
+                        <div id="kalshiCreds" style="display:none">
+                            <div class="form-group">
+                                <label for="kalshiKeyId">Kalshi API Key ID</label>
+                                <input type="password" id="kalshiKeyId" class="form-input" placeholder="Your Kalshi API key ID">
+                                <span class="form-hint">Get from kalshi.com/account/api-keys</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="kalshiPrivateKey">Kalshi Private Key (PEM)</label>
+                                <textarea id="kalshiPrivateKey" class="form-input" rows="3" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+                                <span class="form-hint warning">RSA private key for signing requests. Keep this secret!</span>
+                            </div>
+                        </div>
+
+                        <!-- Polymarket credentials (shown when Polymarket selected) -->
+                        <div id="polymarketCreds">
                         <div class="form-group">
                             <label for="polyApiKey">Polymarket API Key</label>
                             <div class="input-with-action">
@@ -204,6 +229,7 @@
                             <input type="password" id="polyPrivateKey" class="form-input" placeholder="0x...">
                             <span class="form-hint warning">Required for signing live orders. Keep this secret!</span>
                         </div>
+                        </div> <!-- /polymarketCreds -->
                     </div>
                 </div>
                 <div class="panel">

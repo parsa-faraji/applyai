@@ -31,6 +31,7 @@
     };
 
     const DEFAULTS = {
+        exchange: 'polymarket',
         maxPositionSize: 25,
         tradingBudget: 100,
         riskLevel: 'moderate',
@@ -108,10 +109,20 @@
             polySecret: s.polySecret,
             polyPassphrase: s.polyPassphrase,
             polyPrivateKey: s.polyPrivateKey,
+            kalshiKeyId: s.kalshiKeyId,
+            kalshiPrivateKey: s.kalshiPrivateKey,
         };
         for (const [id, val] of Object.entries(fields)) {
             const el = document.getElementById(id);
             if (el && val) el.value = val;
+        }
+
+        // Exchange selector
+        const exchangeEl = document.getElementById('exchange');
+        if (exchangeEl) {
+            exchangeEl.value = s.exchange || DEFAULTS.exchange;
+            toggleExchangeCreds(exchangeEl.value);
+            exchangeEl.addEventListener('change', () => toggleExchangeCreds(exchangeEl.value));
         }
 
         const maxPosition = document.getElementById('maxPositionSize');
@@ -136,13 +147,25 @@
         if (autoRescan) autoRescan.value = s.autoRescan ?? DEFAULTS.autoRescan;
     }
 
+    function toggleExchangeCreds(exchange) {
+        const polyDiv = document.getElementById('polymarketCreds');
+        const kalshiDiv = document.getElementById('kalshiCreds');
+        if (polyDiv) polyDiv.style.display = exchange === 'polymarket' ? '' : 'none';
+        if (kalshiDiv) kalshiDiv.style.display = exchange === 'kalshi' ? '' : 'none';
+    }
+
     function saveSettings() {
         const newBudget = parseInt(document.getElementById('tradingBudget')?.value) || DEFAULTS.tradingBudget;
         const oldBudget = state.settings.tradingBudget || DEFAULTS.tradingBudget;
 
         state.settings = {
+            exchange: document.getElementById('exchange')?.value || DEFAULTS.exchange,
             anthropicKey: document.getElementById('anthropicKey')?.value || '',
             braveApiKey: document.getElementById('braveApiKey')?.value || '',
+            // Kalshi
+            kalshiKeyId: document.getElementById('kalshiKeyId')?.value || '',
+            kalshiPrivateKey: document.getElementById('kalshiPrivateKey')?.value || '',
+            // Polymarket
             polyApiKey: document.getElementById('polyApiKey')?.value || '',
             polySecret: document.getElementById('polySecret')?.value || '',
             polyPassphrase: document.getElementById('polyPassphrase')?.value || '',
@@ -360,10 +383,17 @@
             const order = orderMap[sortSelect?.value || 'volume'] || 'volume24hr';
             const ascending = sortSelect?.value === 'ending' ? 'true' : 'false';
 
-            const resp = await fetch(`/api/markets?limit=20&offset=${state.marketsOffset}&order=${order}&ascending=${ascending}`);
+            const isKalshi = (state.settings.exchange || DEFAULTS.exchange) === 'kalshi';
+            const marketsUrl = isKalshi
+                ? `/api/kalshi-markets?limit=20&status=open`
+                : `/api/markets?limit=20&offset=${state.marketsOffset}&order=${order}&ascending=${ascending}`;
+
+            const resp = await fetch(marketsUrl);
             if (!resp.ok) throw new Error('Failed to load markets');
 
-            const markets = await resp.json();
+            const rawData = await resp.json();
+            // Normalize: Kalshi returns { markets: [...] }, Polymarket returns [...]
+            const markets = isKalshi ? (rawData.markets || rawData) : rawData;
 
             if (state.marketsOffset === 0) {
                 state.markets = markets;
@@ -858,16 +888,28 @@
         submitBtn.textContent = 'Executing...';
 
         try {
+            const isKalshi = market?.exchange === 'kalshi' || (state.settings.exchange || DEFAULTS.exchange) === 'kalshi';
             const headers = { 'Content-Type': 'application/json' };
-            if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
-            if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
-            if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
-            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
 
-            const resp = await fetch('/api/trade', {
+            if (isKalshi) {
+                if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+                if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+            } else {
+                if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
+                if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
+                if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+                if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
+            }
+
+            const tradeEndpoint = isKalshi ? '/api/kalshi-trade' : '/api/trade';
+            const tradeBody = isKalshi
+                ? { ticker: market.ticker || market.id, side: 'yes', action: 'buy', count: Math.floor(amount / (price * 100) || 1), price: Math.round(price * 100) }
+                : { tokenId, side: 'BUY', amount, price };
+
+            const resp = await fetch(tradeEndpoint, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ tokenId, side: 'BUY', amount, price }),
+                body: JSON.stringify(tradeBody),
             });
 
             const data = await resp.json();
@@ -1103,17 +1145,25 @@
         addBotLog('info', `Bot started ${dryRun ? '(DRY RUN)' : '(LIVE)'} — $${remaining.toFixed(0)} remaining`);
 
         try {
+            const isKalshi = (state.settings.exchange || DEFAULTS.exchange) === 'kalshi';
             const headers = { 'Content-Type': 'application/json' };
             if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
             if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
-            if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
-            if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
-            if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
-            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
 
-            const existingTokens = state.positions.map(p => p.tokenId).filter(Boolean);
+            if (isKalshi) {
+                if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+                if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+            } else {
+                if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
+                if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
+                if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+                if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
+            }
 
-            const resp = await fetch('/api/auto-trade', {
+            const existingTokens = state.positions.map(p => p.tokenId || p.ticker).filter(Boolean);
+            const endpoint = isKalshi ? '/api/kalshi-auto-trade' : '/api/auto-trade';
+
+            const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({
@@ -1121,6 +1171,7 @@
                     maxPerTrade: state.settings.maxPositionSize || DEFAULTS.maxPositionSize,
                     riskLevel: state.settings.riskLevel || DEFAULTS.riskLevel,
                     marketsToScan: 10,
+                    marketLimit: 10,
                     existingPositions: existingTokens,
                     dryRun,
                 }),
@@ -1327,21 +1378,28 @@
 
     async function executeAutoExit(action) {
         try {
+            const isKalshi = action.exchange === 'kalshi' || (state.settings.exchange || DEFAULTS.exchange) === 'kalshi';
             const headers = { 'Content-Type': 'application/json' };
-            if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
-            if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
-            if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
-            if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
 
-            const resp = await fetch('/api/trade', {
+            if (isKalshi) {
+                if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+                if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+            } else {
+                if (state.settings.polyApiKey) headers['X-Poly-Api-Key'] = state.settings.polyApiKey;
+                if (state.settings.polySecret) headers['X-Poly-Secret'] = state.settings.polySecret;
+                if (state.settings.polyPassphrase) headers['X-Poly-Passphrase'] = state.settings.polyPassphrase;
+                if (state.settings.polyPrivateKey) headers['X-Poly-Private-Key'] = state.settings.polyPrivateKey;
+            }
+
+            const endpoint = isKalshi ? '/api/kalshi-trade' : '/api/trade';
+            const body = isKalshi
+                ? { ticker: action.ticker || action.tokenId, side: action.outcome?.toLowerCase() || 'yes', action: 'sell', count: action.shares || 1, price: Math.round((action.currentPrice || 0.5) * 100) }
+                : { tokenId: action.tokenId, side: 'SELL', shares: action.shares, price: action.currentPrice };
+
+            const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({
-                    tokenId: action.tokenId,
-                    side: 'SELL',
-                    shares: action.shares,
-                    price: action.currentPrice,
-                }),
+                body: JSON.stringify(body),
             });
 
             const data = await resp.json();

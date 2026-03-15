@@ -32,6 +32,9 @@
     "api/auto-trade.js": {
       "maxDuration": 60
     },
+    "api/kalshi-auto-trade.js": {
+      "maxDuration": 60
+    },
     "api/analyze.js": {
       "maxDuration": 30
     },

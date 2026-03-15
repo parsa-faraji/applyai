@@ -1,11 +1,12 @@
 // Vercel Serverless Function — Position Monitor
 //
-// Checks all open positions against live CLOB prices.
+// Checks all open positions against live prices (Polymarket + Kalshi).
 // Detects: stop-loss, trailing stop, take-profit, price spikes,
 // momentum reversals, time-based urgency, and near-resolution.
 // Returns a list of recommended actions (exit, hold, add).
 
 import { getMidpoint, getBestPrice } from './lib/clob.js';
+import { getOrderBook as getKalshiOrderBook, summarizeOrderBook as summarizeKalshiOB } from './lib/kalshi.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -36,16 +37,18 @@ export default async function handler(req, res) {
     const pricePromises = positions.map(async (pos) => {
         const updated = { ...pos };
 
-        if (!pos.tokenId) {
+        const posId = pos.tokenId || pos.ticker;
+        if (!posId) {
             updatedPositions.push(updated);
             return;
         }
 
         try {
-            // Fetch current price and recent price history in parallel
+            // Fetch current price — route to correct exchange
+            const isKalshi = pos.exchange === 'kalshi';
             const [priceData, recentPrices] = await Promise.all([
-                getBestPrice(pos.tokenId),
-                fetchRecentPrices(pos.tokenId),
+                isKalshi ? getKalshiPrice(pos.ticker, pos.outcome) : getBestPrice(pos.tokenId),
+                isKalshi ? Promise.resolve([]) : fetchRecentPrices(pos.tokenId),
             ]);
 
             const livePrice = priceData.mid;
@@ -293,6 +296,26 @@ export default async function handler(req, res) {
         updatedPositions,
         positionsChecked: positions.length,
     });
+}
+
+/**
+ * Get live price from Kalshi order book
+ */
+async function getKalshiPrice(ticker, outcome) {
+    try {
+        const obData = await getKalshiOrderBook(ticker);
+        const ob = summarizeKalshiOB(obData);
+        if (!ob) return { mid: null };
+
+        const isYes = (outcome || 'Yes').toLowerCase() === 'yes';
+        const mid = ob.midpoint ? ob.midpoint / 100 : null; // convert cents to 0-1
+        const bestBid = isYes ? (ob.bestYesBid ? ob.bestYesBid / 100 : null) : (ob.bestNoBid ? ob.bestNoBid / 100 : null);
+        const bestAsk = isYes ? (ob.bestYesAsk ? ob.bestYesAsk / 100 : null) : null;
+
+        return { mid, bestBid, bestAsk, spread: ob.spread ? ob.spread / 100 : null };
+    } catch {
+        return { mid: null };
+    }
 }
 
 /**
