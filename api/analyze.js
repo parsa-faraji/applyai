@@ -1,5 +1,9 @@
-// Vercel Serverless Function — Claude market analysis
-// Sends market data to Claude and returns trading recommendation
+// Vercel Serverless Function — Claude market analysis with live context
+// Fetches real-time order book, price history, and market data before asking Claude
+
+export const config = {
+    maxDuration: 30,
+};
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,21 +19,32 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Missing market data' });
     }
 
-    // Accept API key from header (client-provided) or env var
     const apiKey = req.headers['x-anthropic-key'] || process.env.ANTHROPIC_API_KEY;
-
     if (!apiKey) {
         return res.status(400).json({ error: 'No Anthropic API key provided. Set it in Settings or configure ANTHROPIC_API_KEY env var.' });
     }
 
     try {
-        const outcomePrices = market.outcomePrices
-            ? (typeof market.outcomePrices === 'string' ? JSON.parse(market.outcomePrices) : market.outcomePrices)
-            : [];
-        const outcomes = market.outcomes
-            ? (typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : market.outcomes)
-            : [];
+        // Parse market data
+        const outcomePrices = parseJson(market.outcomePrices, []);
+        const outcomes = parseJson(market.outcomes, []);
+        const tokens = parseJson(market.clobTokenIds, []);
 
+        // Fetch live context in parallel: order book + price history for YES token
+        const yesTokenId = tokens[0] || '';
+        let liveContext = {};
+
+        if (yesTokenId) {
+            const [orderBook, priceHistory] = await Promise.all([
+                fetchSafe(`https://clob.polymarket.com/book?token_id=${yesTokenId}`)
+                    .then(summarizeOrderBook),
+                fetchSafe(`https://clob.polymarket.com/prices-history?market=${yesTokenId}&startTs=${Math.floor(Date.now() / 1000) - 86400}&endTs=${Math.floor(Date.now() / 1000)}&fidelity=60`)
+                    .then(analyzePriceHistory),
+            ]);
+            liveContext = { orderBook, priceHistory };
+        }
+
+        // Build enriched prompt
         const outcomeSummary = outcomes.map((name, i) => {
             const price = outcomePrices[i] ? (parseFloat(outcomePrices[i]) * 100).toFixed(1) : '?';
             return `  - ${name}: ${price}% (price: $${outcomePrices[i] || '?'})`;
@@ -41,7 +56,33 @@ export default async function handler(req, res) {
             aggressive: 'Recommend trades even with moderate confidence of 3-5+ percentage point mispricings. Be more willing to take contrarian positions.',
         };
 
-        const prompt = `You are an expert prediction market trader and analyst. Analyze the following Polymarket market and provide a trading recommendation.
+        // Build live data section
+        let liveDataSection = '';
+
+        if (liveContext.orderBook) {
+            const ob = liveContext.orderBook;
+            liveDataSection += `
+## Live Order Book (YES token)
+- Best Bid: ${ob.bestBid ? (ob.bestBid * 100).toFixed(1) + '¢' : 'N/A'} | Best Ask: ${ob.bestAsk ? (ob.bestAsk * 100).toFixed(1) + '¢' : 'N/A'}
+- Spread: ${ob.spread ? (ob.spread * 100).toFixed(2) + '¢' : 'N/A'} (${ob.spreadPct ? ob.spreadPct.toFixed(1) + '%' : 'N/A'})
+- Bid Depth: $${ob.bidDepthUsd?.toFixed(0) || '?'} | Ask Depth: $${ob.askDepthUsd?.toFixed(0) || '?'}
+- Depth Ratio (bid/ask): ${ob.depthRatio?.toFixed(2) || 'N/A'} ${ob.depthRatio > 1.5 ? '(heavy buying pressure)' : ob.depthRatio < 0.67 ? '(heavy selling pressure)' : '(balanced)'}
+`;
+        }
+
+        if (liveContext.priceHistory) {
+            const ph = liveContext.priceHistory;
+            liveDataSection += `
+## Price Action (Last 24 Hours)
+- Current Price: ${ph.current ? (ph.current * 100).toFixed(1) + '¢' : 'N/A'}
+- 24h Change: ${ph.change24h != null ? (ph.change24h > 0 ? '+' : '') + (ph.change24h * 100).toFixed(1) + '¢' : 'N/A'} (${ph.change24hPct != null ? ph.change24hPct.toFixed(1) + '%' : 'N/A'})
+- 24h High: ${ph.high24h ? (ph.high24h * 100).toFixed(1) + '¢' : 'N/A'} | 24h Low: ${ph.low24h ? (ph.low24h * 100).toFixed(1) + '¢' : 'N/A'}
+- Momentum (6h): ${ph.momentum || 'unknown'}${ph.momentum === 'rising' ? ' — price trending up' : ph.momentum === 'falling' ? ' — price trending down' : ''}
+- Volatility: ${ph.volatility24h != null ? (ph.volatility24h < 0.02 ? 'Low' : ph.volatility24h < 0.05 ? 'Moderate' : 'High') + ` (σ=${(ph.volatility24h * 100).toFixed(1)}¢)` : 'N/A'}
+`;
+        }
+
+        const prompt = `You are an expert prediction market trader. Analyze this Polymarket market using BOTH the static market info AND the live trading data below.
 
 ## Market Information
 **Question:** ${market.question}
@@ -49,19 +90,21 @@ export default async function handler(req, res) {
 **Category:** ${market.groupItemTitle || market.category || 'Unknown'}
 **End Date:** ${market.endDate || 'Unknown'}
 **Volume:** $${market.volume ? Number(market.volume).toLocaleString() : 'Unknown'}
+**24h Volume:** $${market.volume24hr ? Number(market.volume24hr).toLocaleString() : 'Unknown'}
 **Liquidity:** $${market.liquidity ? Number(market.liquidity).toLocaleString() : 'Unknown'}
 
 ## Current Prices (Market-Implied Probabilities)
 ${outcomeSummary}
-
+${liveDataSection}
 ## Risk Tolerance
 ${riskInstructions[riskLevel] || riskInstructions.moderate}
 
 ## Your Task
 1. **Analyze** the question — what are the key factors and evidence for each outcome?
-2. **Estimate** your own probability for each outcome based on current knowledge
-3. **Compare** your estimate vs the market price — is there an edge?
-4. **Recommend** a specific action
+2. **Read the tape** — what does the price action, momentum, and order book tell you? Is smart money moving in one direction? Is the spread wide (uncertain) or tight (consensus)?
+3. **Estimate** your own probability for each outcome based on current knowledge
+4. **Compare** your estimate vs the market price — is there an edge?
+5. **Recommend** a specific action, factoring in: the spread cost, slippage risk from order book depth, and recent momentum
 
 ## Response Format
 Respond with this exact structure:
@@ -69,11 +112,14 @@ Respond with this exact structure:
 ### Key Factors
 [2-4 bullet points on what drives this outcome]
 
+### Live Data Read
+[What the order book and price action tell you — is this market efficient? Where is the smart money? Any unusual patterns?]
+
 ### Probability Estimate
 [Your estimated probability for each outcome, with brief reasoning]
 
 ### Market Edge
-[Where you see mispricing, if any]
+[Where you see mispricing, if any — account for the spread and execution costs]
 
 ### Recommendation
 **Action:** [BUY YES / BUY NO / HOLD — no trade]
@@ -90,13 +136,8 @@ Respond with this exact structure:
             },
             body: JSON.stringify({
                 model: 'claude-sonnet-4-20250514',
-                max_tokens: 1500,
-                messages: [
-                    {
-                        role: 'user',
-                        content: prompt,
-                    },
-                ],
+                max_tokens: 2000,
+                messages: [{ role: 'user', content: prompt }],
             }),
         });
 
@@ -108,13 +149,12 @@ Respond with this exact structure:
 
         const data = await response.json();
         const content = data.content?.[0]?.text || 'No analysis generated';
-
-        // Parse recommendation from the response
         const recommendation = parseRecommendation(content);
 
         return res.status(200).json({
             analysis: content,
             recommendation,
+            liveContext,
             usage: data.usage,
         });
 
@@ -122,6 +162,91 @@ Respond with this exact structure:
         console.error('Analysis error:', error);
         return res.status(500).json({ error: error.message || 'Analysis failed' });
     }
+}
+
+// Helpers
+
+function parseJson(val, fallback) {
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch { return fallback; }
+    }
+    return fallback;
+}
+
+async function fetchSafe(url) {
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        return resp.json();
+    } catch {
+        return null;
+    }
+}
+
+function summarizeOrderBook(book) {
+    if (!book) return null;
+    const bids = (book.bids || []).slice(0, 10);
+    const asks = (book.asks || []).slice(0, 10);
+
+    const bidDepth = bids.reduce((s, b) => s + parseFloat(b.size || 0), 0);
+    const askDepth = asks.reduce((s, a) => s + parseFloat(a.size || 0), 0);
+    const bestBid = bids[0] ? parseFloat(bids[0].price) : null;
+    const bestAsk = asks[0] ? parseFloat(asks[0].price) : null;
+    const spread = bestBid && bestAsk ? bestAsk - bestBid : null;
+    const mid = bestBid && bestAsk ? (bestBid + bestAsk) / 2 : bestBid || bestAsk;
+
+    return {
+        bestBid, bestAsk, mid, spread,
+        spreadPct: mid ? (spread / mid) * 100 : null,
+        bidDepthUsd: bidDepth,
+        askDepthUsd: askDepth,
+        depthRatio: askDepth > 0 ? bidDepth / askDepth : null,
+    };
+}
+
+function analyzePriceHistory(data) {
+    if (!data) return null;
+    const history = data.history || data || [];
+    if (!Array.isArray(history) || history.length === 0) return null;
+
+    const prices = history.map(p => parseFloat(p.p));
+    const current = prices[prices.length - 1];
+    const dayAgo = prices[0];
+    const change24h = current - dayAgo;
+
+    // High/low
+    const high24h = Math.max(...prices);
+    const low24h = Math.min(...prices);
+
+    // Momentum: compare first third vs last third of last 6 hours
+    const sixHoursIdx = Math.max(0, history.length - Math.floor(history.length / 4));
+    const recentPrices = prices.slice(sixHoursIdx);
+    let momentum = 'flat';
+    if (recentPrices.length >= 3) {
+        const thirdLen = Math.floor(recentPrices.length / 3);
+        const avgFirst = recentPrices.slice(0, thirdLen).reduce((s, p) => s + p, 0) / thirdLen;
+        const avgLast = recentPrices.slice(-thirdLen).reduce((s, p) => s + p, 0) / thirdLen;
+        const diff = avgLast - avgFirst;
+        if (diff > 0.02) momentum = 'rising';
+        else if (diff < -0.02) momentum = 'falling';
+    }
+
+    // Volatility
+    const mean = prices.reduce((s, p) => s + p, 0) / prices.length;
+    const variance = prices.reduce((s, p) => s + (p - mean) ** 2, 0) / prices.length;
+    const volatility24h = Math.sqrt(variance);
+
+    return {
+        current,
+        change24h,
+        change24hPct: dayAgo ? (change24h / dayAgo) * 100 : null,
+        high24h,
+        low24h,
+        momentum,
+        volatility24h,
+        candles: history.slice(-48).map(p => ({ t: p.t, p: parseFloat(p.p) })),
+    };
 }
 
 function parseRecommendation(text) {

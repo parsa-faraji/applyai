@@ -1,6 +1,6 @@
 /**
  * PredictBot — AI-Powered Prediction Market Trading
- * Frontend application for Polymarket + Claude integration
+ * Frontend with live price streaming, real-time P&L, and mini charts
  */
 
 (function () {
@@ -11,7 +11,7 @@
         markets: [],
         selectedMarket: null,
         analysis: null,
-        tradeSide: null, // 'yes' or 'no'
+        tradeSide: null,
         trades: JSON.parse(localStorage.getItem('pb_trades') || '[]'),
         positions: JSON.parse(localStorage.getItem('pb_positions') || '[]'),
         settings: JSON.parse(localStorage.getItem('pb_settings') || '{}'),
@@ -19,6 +19,11 @@
         marketsOffset: 0,
         marketsLoading: false,
         botRunning: false,
+        // Live data
+        livePrices: {},       // tokenId -> { mid, bestBid, bestAsk, updated }
+        pricePollingId: null,  // interval ID for market price polling
+        positionPollingId: null, // interval ID for position P&L refresh
+        liveContext: null,     // current market's live order book + history
     };
 
     const DEFAULTS = {
@@ -28,6 +33,9 @@
         autoTrade: false,
     };
 
+    const PRICE_POLL_INTERVAL = 10000;  // 10s for market prices
+    const POSITION_POLL_INTERVAL = 30000; // 30s for position P&L
+
     // ── Init ───────────────────────────────────────────────
     function init() {
         setupNavigation();
@@ -35,6 +43,7 @@
         loadMarkets();
         checkApiStatus();
         updateBudgetDisplay();
+        startPositionPolling();
     }
 
     // ── Navigation ─────────────────────────────────────────
@@ -52,18 +61,14 @@
             });
         });
 
-        // Settings buttons
-        const saveBtn = document.getElementById('saveSettings');
-        if (saveBtn) saveBtn.addEventListener('click', saveSettings);
+        document.getElementById('saveSettings')?.addEventListener('click', saveSettings);
+        document.getElementById('clearData')?.addEventListener('click', clearAllData);
+        document.getElementById('analyzeBtn')?.addEventListener('click', analyzeMarket);
+        document.getElementById('loadMoreBtn')?.addEventListener('click', loadMoreMarkets);
+        document.getElementById('deriveKeysBtn')?.addEventListener('click', deriveApiKeys);
+        document.getElementById('runBotBtn')?.addEventListener('click', () => runBot(false));
+        document.getElementById('dryRunBtn')?.addEventListener('click', () => runBot(true));
 
-        const clearBtn = document.getElementById('clearData');
-        if (clearBtn) clearBtn.addEventListener('click', clearAllData);
-
-        // Analyze button
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeMarket);
-
-        // Search / filter
         const searchInput = document.getElementById('marketSearch');
         if (searchInput) {
             let debounce;
@@ -80,21 +85,6 @@
                 loadMarkets();
             });
         }
-
-        // Load more
-        const loadMoreBtn = document.getElementById('loadMoreBtn');
-        if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMoreMarkets);
-
-        // Derive keys button
-        const deriveKeysBtn = document.getElementById('deriveKeysBtn');
-        if (deriveKeysBtn) deriveKeysBtn.addEventListener('click', deriveApiKeys);
-
-        // Bot controls
-        const runBotBtn = document.getElementById('runBotBtn');
-        if (runBotBtn) runBotBtn.addEventListener('click', () => runBot(false));
-
-        const dryRunBtn = document.getElementById('dryRunBtn');
-        if (dryRunBtn) dryRunBtn.addEventListener('click', () => runBot(true));
     }
 
     // ── Settings ───────────────────────────────────────────
@@ -140,7 +130,6 @@
         };
         localStorage.setItem('pb_settings', JSON.stringify(state.settings));
 
-        // Update budget if changed
         if (newBudget !== oldBudget) {
             state.budget.total = newBudget;
             localStorage.setItem('pb_budget', JSON.stringify(state.budget));
@@ -164,23 +153,16 @@
         try {
             const resp = await fetch('/api/derive-keys', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Poly-Private-Key': privateKey,
-                },
+                headers: { 'Content-Type': 'application/json', 'X-Poly-Private-Key': privateKey },
             });
-
             const data = await resp.json();
             if (!resp.ok) throw new Error(data.error || 'Failed to derive keys');
 
             const creds = data.credentials;
             if (creds) {
-                const keyEl = document.getElementById('polyApiKey');
-                const secretEl = document.getElementById('polySecret');
-                const passEl = document.getElementById('polyPassphrase');
-                if (keyEl && creds.apiKey) keyEl.value = creds.apiKey;
-                if (secretEl && creds.secret) secretEl.value = creds.secret;
-                if (passEl && creds.passphrase) passEl.value = creds.passphrase;
+                if (creds.apiKey) document.getElementById('polyApiKey').value = creds.apiKey;
+                if (creds.secret) document.getElementById('polySecret').value = creds.secret;
+                if (creds.passphrase) document.getElementById('polyPassphrase').value = creds.passphrase;
                 showToast('API credentials derived! Click Save Settings.', 'success');
             }
         } catch (error) {
@@ -195,10 +177,13 @@
         localStorage.removeItem('pb_trades');
         localStorage.removeItem('pb_positions');
         localStorage.removeItem('pb_settings');
+        localStorage.removeItem('pb_budget');
         state.trades = [];
         state.positions = [];
         state.settings = {};
+        state.budget = { total: 100, spent: 0 };
         loadSettings();
+        updateBudgetDisplay();
         showToast('All data cleared', 'info');
     }
 
@@ -225,6 +210,111 @@
         }
     }
 
+    // ── Live Price Polling ──────────────────────────────────
+    // Poll CLOB midpoint for the selected market every 10s
+    function startPricePolling(tokenIds) {
+        stopPricePolling();
+        if (!tokenIds || tokenIds.length === 0) return;
+
+        const poll = async () => {
+            for (const tokenId of tokenIds) {
+                try {
+                    const resp = await fetch(`https://clob.polymarket.com/midpoint?token_id=${tokenId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        state.livePrices[tokenId] = {
+                            mid: parseFloat(data.mid),
+                            updated: Date.now(),
+                        };
+                    }
+                } catch { /* ignore */ }
+            }
+            updateLivePriceDisplay();
+        };
+
+        poll(); // immediate
+        state.pricePollingId = setInterval(poll, PRICE_POLL_INTERVAL);
+    }
+
+    function stopPricePolling() {
+        if (state.pricePollingId) {
+            clearInterval(state.pricePollingId);
+            state.pricePollingId = null;
+        }
+    }
+
+    function updateLivePriceDisplay() {
+        const market = state.selectedMarket;
+        if (!market) return;
+
+        const tokens = parseJsonSafe(market.clobTokenIds, []);
+        const yesToken = tokens[0];
+        const noToken = tokens[1];
+
+        // Update price badges on the selected market card
+        const yesLive = yesToken ? state.livePrices[yesToken] : null;
+        const noLive = noToken ? state.livePrices[noToken] : null;
+
+        // Update detail panel prices
+        const outcomes = document.querySelectorAll('.outcome-price');
+        if (yesLive && outcomes[0]) {
+            outcomes[0].textContent = (yesLive.mid * 100).toFixed(1) + '%';
+        }
+        if (noLive && outcomes[1]) {
+            outcomes[1].textContent = (noLive.mid * 100).toFixed(1) + '%';
+        } else if (yesLive && outcomes[1]) {
+            outcomes[1].textContent = ((1 - yesLive.mid) * 100).toFixed(1) + '%';
+        }
+
+        // Update the live indicator
+        const liveIndicator = document.getElementById('liveIndicator');
+        if (liveIndicator && yesLive) {
+            const age = Math.floor((Date.now() - yesLive.updated) / 1000);
+            liveIndicator.textContent = age < 5 ? 'LIVE' : `${age}s ago`;
+            liveIndicator.className = age < 15 ? 'live-indicator live' : 'live-indicator stale';
+        }
+
+        // Update trade summary if active
+        updateTradeSummary();
+    }
+
+    // ── Position P&L Polling ───────────────────────────────
+    // Refresh position currentPrice every 30s from CLOB
+    function startPositionPolling() {
+        if (state.positionPollingId) return;
+
+        const poll = async () => {
+            if (state.positions.length === 0) return;
+
+            let updated = false;
+            for (const pos of state.positions) {
+                if (!pos.tokenId) continue;
+                try {
+                    const resp = await fetch(`https://clob.polymarket.com/midpoint?token_id=${pos.tokenId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const newPrice = parseFloat(data.mid);
+                        if (newPrice && newPrice !== pos.currentPrice) {
+                            pos.currentPrice = newPrice;
+                            updated = true;
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+
+            if (updated) {
+                localStorage.setItem('pb_positions', JSON.stringify(state.positions));
+                // Re-render if portfolio view is active
+                if (document.getElementById('portfolioView')?.classList.contains('active')) {
+                    renderPortfolio();
+                }
+            }
+        };
+
+        poll(); // immediate
+        state.positionPollingId = setInterval(poll, POSITION_POLL_INTERVAL);
+    }
+
     // ── Markets ────────────────────────────────────────────
     async function loadMarkets() {
         if (state.marketsLoading) return;
@@ -237,12 +327,7 @@
 
         try {
             const sortSelect = document.getElementById('marketSort');
-            const orderMap = {
-                volume: 'volume24hr',
-                newest: 'startDate',
-                ending: 'endDate',
-                liquidity: 'liquidity',
-            };
+            const orderMap = { volume: 'volume24hr', newest: 'startDate', ending: 'endDate', liquidity: 'liquidity' };
             const order = orderMap[sortSelect?.value || 'volume'] || 'volume24hr';
             const ascending = sortSelect?.value === 'ending' ? 'true' : 'false';
 
@@ -261,9 +346,7 @@
             renderMarketCards(markets, state.marketsOffset === 0);
 
             const loadMoreBtn = document.getElementById('loadMoreBtn');
-            if (loadMoreBtn) {
-                loadMoreBtn.style.display = markets.length >= 20 ? 'inline-flex' : 'none';
-            }
+            if (loadMoreBtn) loadMoreBtn.style.display = markets.length >= 20 ? 'inline-flex' : 'none';
         } catch (error) {
             console.error('Failed to load markets:', error);
             if (state.marketsOffset === 0) {
@@ -319,10 +402,8 @@
 
     function filterMarkets(query) {
         const q = query.toLowerCase().trim();
-        const cards = document.querySelectorAll('.market-card');
-        cards.forEach(card => {
-            const text = card.textContent.toLowerCase();
-            card.style.display = !q || text.includes(q) ? '' : 'none';
+        document.querySelectorAll('.market-card').forEach(card => {
+            card.style.display = !q || card.textContent.toLowerCase().includes(q) ? '' : 'none';
         });
     }
 
@@ -331,8 +412,8 @@
         state.selectedMarket = market;
         state.analysis = null;
         state.tradeSide = null;
+        state.liveContext = null;
 
-        // Highlight selected card
         document.querySelectorAll('.market-card').forEach(c => c.classList.remove('selected'));
         const card = document.querySelector(`.market-card[data-id="${market.id}"]`);
         if (card) card.classList.add('selected');
@@ -341,9 +422,157 @@
         renderTradingForm(market);
         resetAnalysis();
 
-        // Enable analyze button
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        if (analyzeBtn) analyzeBtn.disabled = false;
+        document.getElementById('analyzeBtn').disabled = false;
+
+        // Start polling live prices for this market
+        const tokens = parseJsonSafe(market.clobTokenIds, []);
+        startPricePolling(tokens.filter(Boolean));
+
+        // Fetch live context (order book + price history) for the detail panel
+        if (tokens[0]) fetchAndShowLiveContext(tokens[0]);
+    }
+
+    async function fetchAndShowLiveContext(tokenId) {
+        try {
+            const resp = await fetch(`/api/market-context?tokenId=${tokenId}`);
+            if (!resp.ok) return;
+            state.liveContext = await resp.json();
+            renderLiveContextPanel();
+        } catch { /* silent */ }
+    }
+
+    function renderLiveContextPanel() {
+        const ctx = state.liveContext;
+        if (!ctx) return;
+
+        const container = document.getElementById('liveContextSection');
+        if (!container) return;
+
+        let html = '';
+
+        // Order book summary
+        const ob = ctx.orderBook;
+        if (ob) {
+            const depthLabel = ob.depthRatio > 1.5 ? 'Buying pressure' : ob.depthRatio < 0.67 ? 'Selling pressure' : 'Balanced';
+            html += `
+                <div class="live-section">
+                    <div class="live-section-title">Order Book</div>
+                    <div class="live-stats-row">
+                        <div class="live-stat">
+                            <span class="live-stat-label">Bid</span>
+                            <span class="live-stat-value price-yes">${ob.bestBid ? (ob.bestBid * 100).toFixed(1) + '¢' : '—'}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Ask</span>
+                            <span class="live-stat-value price-no">${ob.bestAsk ? (ob.bestAsk * 100).toFixed(1) + '¢' : '—'}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Spread</span>
+                            <span class="live-stat-value">${ob.spreadPct != null ? ob.spreadPct.toFixed(1) + '%' : '—'}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Flow</span>
+                            <span class="live-stat-value">${depthLabel}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Price history
+        const ph = ctx.priceHistory;
+        if (ph) {
+            const changeColor = ph.change24h >= 0 ? 'var(--green)' : 'var(--red)';
+            const changeSign = ph.change24h >= 0 ? '+' : '';
+            const volLabel = ph.volatility24h < 0.02 ? 'Low' : ph.volatility24h < 0.05 ? 'Moderate' : 'High';
+
+            html += `
+                <div class="live-section">
+                    <div class="live-section-title">24h Price Action</div>
+                    <div class="live-stats-row">
+                        <div class="live-stat">
+                            <span class="live-stat-label">24h Change</span>
+                            <span class="live-stat-value" style="color:${changeColor}">${changeSign}${(ph.change24h * 100).toFixed(1)}¢</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">High</span>
+                            <span class="live-stat-value">${(ph.high24h * 100).toFixed(1)}¢</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Low</span>
+                            <span class="live-stat-value">${(ph.low24h * 100).toFixed(1)}¢</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Momentum</span>
+                            <span class="live-stat-value">${ph.momentum === 'rising' ? 'Rising' : ph.momentum === 'falling' ? 'Falling' : 'Flat'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Mini sparkline chart using canvas
+            if (ph.candles24h && ph.candles24h.length > 2) {
+                html += `<canvas id="priceChart" class="price-chart" height="80"></canvas>`;
+            }
+        }
+
+        container.innerHTML = html;
+
+        // Draw sparkline
+        if (ph?.candles24h?.length > 2) {
+            requestAnimationFrame(() => drawSparkline('priceChart', ph.candles24h));
+        }
+    }
+
+    function drawSparkline(canvasId, candles) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+
+        const w = rect.width;
+        const h = rect.height;
+        const prices = candles.map(c => c.p);
+        const min = Math.min(...prices);
+        const max = Math.max(...prices);
+        const range = max - min || 0.01;
+        const pad = 4;
+
+        // Determine color: green if up, red if down
+        const isUp = prices[prices.length - 1] >= prices[0];
+        const color = isUp ? '#22c55e' : '#ef4444';
+        const bgColor = isUp ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
+
+        // Draw filled area
+        ctx.beginPath();
+        prices.forEach((p, i) => {
+            const x = (i / (prices.length - 1)) * w;
+            const y = h - pad - ((p - min) / range) * (h - pad * 2);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+
+        // Draw line
+        ctx.beginPath();
+        prices.forEach((p, i) => {
+            const x = (i / (prices.length - 1)) * w;
+            const y = h - pad - ((p - min) / range) * (h - pad * 2);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
     }
 
     function renderMarketDetail(market) {
@@ -367,7 +596,10 @@
 
         panel.innerHTML = `
             <div class="market-detail-content">
-                <div class="detail-title">${escapeHtml(market.question)}</div>
+                <div class="detail-header-row">
+                    <div class="detail-title">${escapeHtml(market.question)}</div>
+                    <span class="live-indicator" id="liveIndicator">LIVE</span>
+                </div>
                 ${market.description ? `<div class="detail-description">${escapeHtml(truncate(market.description, 300))}</div>` : ''}
                 <div class="detail-stats">
                     <div class="detail-stat">
@@ -388,14 +620,15 @@
                     </div>
                 </div>
                 <div class="detail-outcomes">${outcomesHtml}</div>
+                <div id="liveContextSection" class="live-context-section"></div>
             </div>
         `;
     }
 
     // ── Claude Analysis ────────────────────────────────────
     function resetAnalysis() {
-        const content = document.getElementById('analysisContent');
-        content.innerHTML = '<div class="empty-state small"><p>Click "Analyze Market" for Claude\'s trading recommendation</p></div>';
+        document.getElementById('analysisContent').innerHTML =
+            '<div class="empty-state small"><p>Click "Analyze Market" for Claude\'s trading recommendation</p></div>';
     }
 
     async function analyzeMarket() {
@@ -405,14 +638,12 @@
         const content = document.getElementById('analysisContent');
         const analyzeBtn = document.getElementById('analyzeBtn');
 
-        content.innerHTML = '<div class="analysis-loading"><span class="loading-spinner"></span> Claude is analyzing this market...</div>';
+        content.innerHTML = '<div class="analysis-loading"><span class="loading-spinner"></span> Claude is analyzing with live market data...</div>';
         analyzeBtn.disabled = true;
 
         try {
             const headers = { 'Content-Type': 'application/json' };
-            if (state.settings.anthropicKey) {
-                headers['X-Anthropic-Key'] = state.settings.anthropicKey;
-            }
+            if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
 
             const resp = await fetch('/api/analyze', {
                 method: 'POST',
@@ -432,7 +663,6 @@
             state.analysis = data;
             renderAnalysis(data);
 
-            // Auto-trade if enabled
             if (state.settings.autoTrade && data.recommendation?.action !== 'HOLD') {
                 autoExecuteTrade(data.recommendation);
             }
@@ -449,7 +679,6 @@
         const content = document.getElementById('analysisContent');
         const rec = data.recommendation || {};
 
-        // Convert markdown to HTML
         let html = data.analysis
             .replace(/^### (.+)$/gm, '<h3>$1</h3>')
             .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -458,7 +687,6 @@
             .replace(/\n\n/g, '</p><p>')
             .replace(/\n/g, '<br>');
 
-        // Recommendation box
         let recClass = 'hold';
         if (rec.action?.includes('YES')) recClass = 'buy-yes';
         else if (rec.action?.includes('NO')) recClass = 'buy-no';
@@ -474,12 +702,8 @@
 
         content.innerHTML = `<div class="analysis-result"><p>${html}</p>${recHtml}</div>`;
 
-        // Pre-select trade side based on recommendation
-        if (rec.action?.includes('YES')) {
-            setTradeSide('yes');
-        } else if (rec.action?.includes('NO')) {
-            setTradeSide('no');
-        }
+        if (rec.action?.includes('YES')) setTradeSide('yes');
+        else if (rec.action?.includes('NO')) setTradeSide('no');
     }
 
     // ── Trading ────────────────────────────────────────────
@@ -487,11 +711,10 @@
         const container = document.getElementById('tradingContent');
         const outcomes = parseJsonSafe(market.outcomes, []);
         const prices = parseJsonSafe(market.outcomePrices, []);
-        const tokens = parseJsonSafe(market.clobTokenIds, []);
+        const maxSize = state.settings.maxPositionSize || DEFAULTS.maxPositionSize;
 
         const yesPrice = prices[0] ? parseFloat(prices[0]) : 0.5;
         const noPrice = prices[1] ? parseFloat(prices[1]) : 0.5;
-        const maxSize = state.settings.maxPositionSize || DEFAULTS.maxPositionSize;
 
         container.innerHTML = `
             <div class="trade-form">
@@ -503,7 +726,6 @@
                         Buy ${escapeHtml(outcomes[1] || 'No')} — ${(noPrice * 100).toFixed(0)}¢
                     </button>
                 </div>
-
                 <div class="trade-input-group">
                     <label>Amount (USDC)</label>
                     <div class="trade-input-row">
@@ -511,38 +733,27 @@
                         <span class="trade-suffix">USDC</span>
                     </div>
                 </div>
-
                 <div class="trade-summary" id="tradeSummary">
-                    <div class="trade-summary-row">
-                        <span>Select a side to see trade details</span>
-                    </div>
+                    <div class="trade-summary-row"><span>Select a side to see trade details</span></div>
                 </div>
-
                 <button class="trade-submit" id="tradeSubmit" disabled onclick="window._executeTrade()">
                     Select a side to trade
                 </button>
             </div>
         `;
 
-        // Update summary on amount change
-        const amountInput = document.getElementById('tradeAmount');
-        if (amountInput) {
-            amountInput.addEventListener('input', updateTradeSummary);
-        }
+        document.getElementById('tradeAmount')?.addEventListener('input', updateTradeSummary);
     }
 
-    // Expose to global scope for onclick handlers
     window._setTradeSide = setTradeSide;
     window._executeTrade = executeTrade;
 
     function setTradeSide(side) {
         state.tradeSide = side;
-
         const yesBtn = document.getElementById('sideYes');
         const noBtn = document.getElementById('sideNo');
         if (yesBtn) yesBtn.className = side === 'yes' ? 'side-btn active-yes' : 'side-btn';
         if (noBtn) noBtn.className = side === 'no' ? 'side-btn active-no' : 'side-btn';
-
         updateTradeSummary();
 
         const submitBtn = document.getElementById('tradeSubmit');
@@ -558,8 +769,15 @@
         if (!summary || !state.selectedMarket || !state.tradeSide) return;
 
         const prices = parseJsonSafe(state.selectedMarket.outcomePrices, []);
+        const tokens = parseJsonSafe(state.selectedMarket.clobTokenIds, []);
         const priceIdx = state.tradeSide === 'yes' ? 0 : 1;
-        const price = prices[priceIdx] ? parseFloat(prices[priceIdx]) : 0.5;
+        const tokenId = tokens[priceIdx];
+
+        // Use live price if available
+        let price = prices[priceIdx] ? parseFloat(prices[priceIdx]) : 0.5;
+        const livePrice = tokenId ? state.livePrices[tokenId] : null;
+        if (livePrice) price = livePrice.mid;
+
         const amount = parseFloat(document.getElementById('tradeAmount')?.value) || 0;
         const shares = amount / price;
         const potentialPayout = shares;
@@ -567,7 +785,7 @@
 
         summary.innerHTML = `
             <div class="trade-summary-row">
-                <span>Price</span>
+                <span>Price ${livePrice ? '<span class="live-badge">LIVE</span>' : ''}</span>
                 <span class="value">${(price * 100).toFixed(1)}¢</span>
             </div>
             <div class="trade-summary-row">
@@ -596,15 +814,8 @@
         const amount = parseFloat(document.getElementById('tradeAmount')?.value);
         const maxSize = state.settings.maxPositionSize || DEFAULTS.maxPositionSize;
 
-        if (!amount || amount <= 0) {
-            showToast('Enter a valid amount', 'error');
-            return;
-        }
-
-        if (amount > maxSize) {
-            showToast(`Amount exceeds max position size ($${maxSize})`, 'error');
-            return;
-        }
+        if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+        if (amount > maxSize) { showToast(`Amount exceeds max position size ($${maxSize})`, 'error'); return; }
 
         const prices = parseJsonSafe(market.outcomePrices, []);
         const tokens = parseJsonSafe(market.clobTokenIds, []);
@@ -626,18 +837,12 @@
             const resp = await fetch('/api/trade', {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({
-                    tokenId,
-                    side: 'BUY',
-                    amount,
-                    price,
-                }),
+                body: JSON.stringify({ tokenId, side: 'BUY', amount, price }),
             });
 
             const data = await resp.json();
             if (!resp.ok) throw new Error(data.error || 'Trade failed');
 
-            // Record the trade
             const trade = {
                 ...data.trade,
                 market: market.question,
@@ -650,44 +855,33 @@
             state.trades.unshift(trade);
             localStorage.setItem('pb_trades', JSON.stringify(state.trades));
 
-            // Add position
-            const existingPos = state.positions.find(
-                p => p.marketId === market.id && p.outcome === trade.outcome
-            );
+            // Update positions
+            const existingPos = state.positions.find(p => p.marketId === market.id && p.outcome === trade.outcome);
             if (existingPos) {
                 existingPos.shares += trade.shares;
                 existingPos.cost += amount;
                 existingPos.avgPrice = existingPos.cost / existingPos.shares;
             } else {
                 state.positions.unshift({
-                    marketId: market.id,
-                    market: market.question,
-                    outcome: trade.outcome,
-                    shares: trade.shares,
-                    cost: amount,
-                    avgPrice: price,
-                    currentPrice: price,
-                    timestamp: trade.timestamp,
+                    marketId: market.id, market: market.question, outcome: trade.outcome,
+                    shares: trade.shares, cost: amount, avgPrice: price, currentPrice: price,
+                    tokenId, timestamp: trade.timestamp,
                 });
             }
             localStorage.setItem('pb_positions', JSON.stringify(state.positions));
 
-            // Update budget
             state.budget.spent += amount;
             localStorage.setItem('pb_budget', JSON.stringify(state.budget));
             updateBudgetDisplay();
 
             const liveTag = data.trade?.live ? '[LIVE]' : '[PAPER]';
             showToast(`${liveTag} Bought ${trade.shares.toFixed(2)} ${trade.outcome} shares for $${amount}`, 'success');
-
         } catch (error) {
             console.error('Trade error:', error);
             showToast('Trade failed: ' + error.message, 'error');
         } finally {
-            if (submitBtn) {
-                submitBtn.disabled = false;
-                submitBtn.textContent = state.tradeSide === 'yes' ? 'Buy Yes' : 'Buy No';
-            }
+            submitBtn.disabled = false;
+            submitBtn.textContent = state.tradeSide === 'yes' ? 'Buy Yes' : 'Buy No';
         }
     }
 
@@ -697,7 +891,6 @@
         const side = recommendation.action.includes('YES') ? 'yes' : 'no';
         setTradeSide(side);
 
-        // Calculate amount based on suggested size
         const maxSize = state.settings.maxPositionSize || DEFAULTS.maxPositionSize;
         const sizeMap = { Small: 0.1, Medium: 0.2, Large: 0.4 };
         const fraction = sizeMap[recommendation.suggestedSize] || 0.1;
@@ -708,8 +901,6 @@
 
         updateTradeSummary();
         showToast(`Auto-trade: ${recommendation.action} — $${amount}`, 'info');
-
-        // Execute after a short delay so user can see what's happening
         setTimeout(() => executeTrade(), 1500);
     }
 
@@ -769,15 +960,17 @@
 
         state.positions.forEach((pos, i) => {
             const pnl = (pos.currentPrice - pos.avgPrice) * pos.shares;
+            const pnlPct = pos.avgPrice > 0 ? ((pos.currentPrice - pos.avgPrice) / pos.avgPrice * 100).toFixed(1) : '0';
             const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
             const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+            const priceAge = pos.currentPrice !== pos.avgPrice ? ' (live)' : '';
 
             html += `
                 <div class="position-row">
                     <span class="position-market">${escapeHtml(truncate(pos.market, 60))}</span>
-                    <span class="position-side ${pos.outcome.toLowerCase()}">${pos.outcome}</span>
-                    <span>${pos.shares.toFixed(2)}</span>
-                    <span class="position-pnl ${pnlClass}">${pnlStr}</span>
+                    <span class="position-side ${pos.outcome.toLowerCase()}">${pos.outcome} @ ${(pos.avgPrice * 100).toFixed(0)}¢</span>
+                    <span>${pos.shares.toFixed(2)} <span class="text-muted">(now ${pos.currentPrice ? (pos.currentPrice * 100).toFixed(0) + '¢' : '—'}${priceAge})</span></span>
+                    <span class="position-pnl ${pnlClass}">${pnlStr} (${pnlPct}%)</span>
                     <button class="btn btn-sm btn-secondary" onclick="window._closePosition(${i})">Close</button>
                 </div>
             `;
@@ -817,9 +1010,10 @@
         `;
 
         state.trades.slice(0, 50).forEach(trade => {
+            const liveTag = trade.live ? '<span class="live-badge">LIVE</span>' : (trade.paper ? '<span class="paper-badge">PAPER</span>' : '');
             html += `
                 <div class="history-row">
-                    <span>${escapeHtml(truncate(trade.market || '', 50))}</span>
+                    <span>${escapeHtml(truncate(trade.market || '', 50))} ${liveTag}</span>
                     <span class="position-side ${(trade.outcome || '').toLowerCase()}">${trade.outcome || trade.side}</span>
                     <span>$${(trade.amount || 0).toFixed(2)}</span>
                     <span>${((trade.entryPrice || 0) * 100).toFixed(1)}¢</span>
@@ -854,24 +1048,14 @@
 
     // ── Bot ────────────────────────────────────────────────
     async function runBot(dryRun) {
-        if (state.botRunning) {
-            showToast('Bot is already running', 'error');
-            return;
-        }
-
-        if (!state.settings.anthropicKey) {
-            showToast('Set your Anthropic API key in Settings first', 'error');
-            return;
-        }
+        if (state.botRunning) { showToast('Bot is already running', 'error'); return; }
+        if (!state.settings.anthropicKey) { showToast('Set your Anthropic API key in Settings first', 'error'); return; }
 
         const total = state.budget.total || state.settings.tradingBudget || DEFAULTS.tradingBudget;
         const spent = state.budget.spent || 0;
         const remaining = total - spent;
 
-        if (remaining < 1 && !dryRun) {
-            showToast('Budget exhausted! Increase your budget in Settings.', 'error');
-            return;
-        }
+        if (remaining < 1 && !dryRun) { showToast('Budget exhausted!', 'error'); return; }
 
         state.botRunning = true;
         const runBtn = document.getElementById('runBotBtn');
@@ -884,12 +1068,9 @@
         if (dryBtn) dryBtn.disabled = true;
         if (statusDot) statusDot.className = 'status-dot connected';
         if (statusText) statusText.textContent = dryRun ? 'Dry run...' : 'Trading...';
-        if (logEl) {
-            logEl.style.display = 'block';
-            logEl.innerHTML = '';
-        }
+        if (logEl) { logEl.style.display = 'block'; logEl.innerHTML = ''; }
 
-        addBotLog('info', `Bot started ${dryRun ? '(DRY RUN)' : '(LIVE)'} — budget $${remaining.toFixed(0)} remaining`);
+        addBotLog('info', `Bot started ${dryRun ? '(DRY RUN)' : '(LIVE)'} — $${remaining.toFixed(0)} remaining`);
 
         try {
             const headers = { 'Content-Type': 'application/json' };
@@ -905,8 +1086,7 @@
                 method: 'POST',
                 headers,
                 body: JSON.stringify({
-                    budget: total,
-                    spent,
+                    budget: total, spent,
                     maxPerTrade: state.settings.maxPositionSize || DEFAULTS.maxPositionSize,
                     riskLevel: state.settings.riskLevel || DEFAULTS.riskLevel,
                     marketsToScan: 10,
@@ -917,7 +1097,6 @@
 
             const report = await resp.json();
 
-            // Log results
             addBotLog('info', `Scanned ${report.marketsScanned} markets, analyzed ${report.marketsAnalyzed}`);
 
             for (const analysis of (report.analyses || [])) {
@@ -925,7 +1104,8 @@
                 if (rec.action === 'HOLD') {
                     addBotLog('skip', `HOLD: ${truncate(analysis.market, 60)} — ${rec.reasoning || 'no edge'}`);
                 } else {
-                    addBotLog('info', `${rec.action}: ${truncate(analysis.market, 60)} (${rec.confidence} conf, ${rec.edgePercent || '?'}pt edge)`);
+                    const liveInfo = analysis.liveData ? ` [${analysis.liveData}]` : '';
+                    addBotLog('info', `${rec.action}: ${truncate(analysis.market, 50)} (${rec.confidence}, ${rec.edgePercent || '?'}pt edge)${liveInfo}`);
                 }
             }
 
@@ -933,29 +1113,19 @@
                 const tag = trade.live ? 'LIVE' : (trade.status === 'dry_run' ? 'DRY' : 'PAPER');
                 addBotLog('trade', `[${tag}] ${trade.outcome} ${truncate(trade.market, 50)} — $${trade.amount} @ ${(trade.price * 100).toFixed(0)}¢`);
 
-                // Record trade in local state
                 state.trades.unshift(trade);
 
-                // Update positions
                 if (!dryRun) {
-                    const existing = state.positions.find(
-                        p => p.marketId === trade.marketId && p.outcome === trade.outcome
-                    );
+                    const existing = state.positions.find(p => p.marketId === trade.marketId && p.outcome === trade.outcome);
                     if (existing) {
                         existing.shares += trade.shares;
                         existing.cost += trade.amount;
                         existing.avgPrice = existing.cost / existing.shares;
                     } else {
                         state.positions.unshift({
-                            marketId: trade.marketId,
-                            market: trade.market,
-                            outcome: trade.outcome,
-                            shares: trade.shares,
-                            cost: trade.amount,
-                            avgPrice: trade.price,
-                            currentPrice: trade.price,
-                            tokenId: trade.tokenId,
-                            timestamp: trade.timestamp,
+                            marketId: trade.marketId, market: trade.market, outcome: trade.outcome,
+                            shares: trade.shares, cost: trade.amount, avgPrice: trade.price,
+                            currentPrice: trade.price, tokenId: trade.tokenId, timestamp: trade.timestamp,
                         });
                     }
                 }
@@ -965,14 +1135,12 @@
                 addBotLog('error', `Error: ${err.market ? truncate(err.market, 40) + ' — ' : ''}${err.error}`);
             }
 
-            // Update budget
             if (!dryRun && report.totalSpent > 0) {
                 state.budget.spent += report.totalSpent;
                 localStorage.setItem('pb_budget', JSON.stringify(state.budget));
-                addBotLog('info', `Spent $${report.totalSpent.toFixed(2)} this run — $${(total - state.budget.spent).toFixed(0)} remaining`);
+                addBotLog('info', `Spent $${report.totalSpent.toFixed(2)} — $${(total - state.budget.spent).toFixed(0)} remaining`);
             }
 
-            // Save
             localStorage.setItem('pb_trades', JSON.stringify(state.trades));
             localStorage.setItem('pb_positions', JSON.stringify(state.positions));
 
@@ -997,7 +1165,6 @@
     function addBotLog(type, message) {
         const logEl = document.getElementById('botLog');
         if (!logEl) return;
-
         const time = new Date().toLocaleTimeString();
         const entry = document.createElement('div');
         entry.className = `bot-log-entry ${type}`;
@@ -1010,8 +1177,7 @@
     function parseJsonSafe(val, fallback) {
         if (Array.isArray(val)) return val;
         if (typeof val === 'string') {
-            try { return JSON.parse(val); }
-            catch { return fallback; }
+            try { return JSON.parse(val); } catch { return fallback; }
         }
         return fallback;
     }
@@ -1055,7 +1221,6 @@
         container.appendChild(toast);
 
         requestAnimationFrame(() => toast.classList.add('show'));
-
         setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);

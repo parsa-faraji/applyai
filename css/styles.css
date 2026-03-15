@@ -1117,6 +1117,128 @@ body {
     color: var(--blue);
 }
 
+/* Live Data */
+.detail-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.live-indicator {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+}
+
+.live-indicator.live {
+    background: var(--green-bg);
+    color: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.live-indicator.stale {
+    background: var(--yellow-bg);
+    color: var(--yellow);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.live-context-section {
+    margin-top: 16px;
+}
+
+.live-section {
+    margin-bottom: 12px;
+}
+
+.live-section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.live-stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.live-stat {
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border-radius: 6px;
+}
+
+.live-stat-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    display: block;
+    margin-bottom: 2px;
+}
+
+.live-stat-value {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+}
+
+.price-chart {
+    width: 100%;
+    height: 80px;
+    border-radius: 6px;
+    background: var(--bg-card);
+    margin-top: 8px;
+}
+
+.live-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    background: var(--green-bg);
+    color: var(--green);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.paper-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    background: var(--yellow-bg);
+    color: var(--yellow);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.text-muted {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
     .markets-layout {

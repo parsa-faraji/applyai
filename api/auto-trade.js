@@ -1,17 +1,16 @@
-// Vercel Serverless Function — Autonomous Trading Loop
+// Vercel Serverless Function — Autonomous Trading Loop with Live Data
 //
-// Called via Vercel Cron or manually from the frontend.
 // 1. Fetches top markets from Gamma API
-// 2. Filters for tradeable opportunities (good liquidity, not already positioned)
-// 3. Sends each to Claude for analysis
-// 4. Executes trades on recommendations that meet confidence thresholds
-// 5. Tracks budget and returns a full report
+// 2. For each candidate: fetches live order book + price history from CLOB
+// 3. Claude analyzes with full live context (not just static snapshots)
+// 4. Executes trades using Kelly-informed sizing
+// 5. Enforces portfolio-level risk limits
 
 import { ethers } from 'ethers';
 import { buildMarketOrder, signOrder, submitOrder, getMidpoint } from './lib/clob.js';
 
 export const config = {
-    maxDuration: 60, // Allow up to 60s for the full loop
+    maxDuration: 60,
 };
 
 export default async function handler(req, res) {
@@ -23,13 +22,13 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
     const {
-        budget = 100,           // Total USDC budget
-        spent = 0,              // Already spent
-        maxPerTrade = 25,       // Max per single trade
+        budget = 100,
+        spent = 0,
+        maxPerTrade = 25,
         riskLevel = 'moderate',
-        marketsToScan = 10,     // How many markets to analyze
-        existingPositions = [], // Token IDs we already hold
-        dryRun = false,         // If true, analyze but don't execute
+        marketsToScan = 10,
+        existingPositions = [],
+        dryRun = false,
     } = req.body;
 
     const anthropicKey = req.headers['x-anthropic-key'] || process.env.ANTHROPIC_API_KEY;
@@ -44,26 +43,15 @@ export default async function handler(req, res) {
 
     const remaining = budget - spent;
     if (remaining < 1) {
-        return res.status(200).json({
-            message: 'Budget exhausted',
-            budget, spent, remaining: 0,
-            trades: [],
-        });
+        return res.status(200).json({ message: 'Budget exhausted', budget, spent, remaining: 0, trades: [] });
     }
 
     const hasLiveCreds = !!(polyApiKey && polySecret && polyPassphrase && polyPrivateKey);
     const report = {
         startedAt: new Date().toISOString(),
-        budget,
-        spent,
-        remaining,
-        marketsScanned: 0,
-        marketsAnalyzed: 0,
-        tradesExecuted: 0,
-        totalSpent: 0,
-        trades: [],
-        analyses: [],
-        errors: [],
+        budget, spent, remaining,
+        marketsScanned: 0, marketsAnalyzed: 0, tradesExecuted: 0, totalSpent: 0,
+        trades: [], analyses: [], errors: [],
         live: hasLiveCreds && !dryRun,
     };
 
@@ -72,57 +60,66 @@ export default async function handler(req, res) {
         const markets = await fetchTopMarkets(marketsToScan);
         report.marketsScanned = markets.length;
 
-        // Step 2: Filter — skip markets we already have positions in, low liquidity, etc.
+        // Step 2: Filter
         const candidates = markets.filter(m => {
             const tokens = parseJsonSafe(m.clobTokenIds, []);
             const hasPosition = tokens.some(t => existingPositions.includes(t));
             const liquidity = parseFloat(m.liquidity || 0);
-            return !hasPosition && liquidity >= 5000; // min $5k liquidity
+            return !hasPosition && liquidity >= 5000;
         });
 
-        // Step 3: Analyze each candidate with Claude (max 5 per run to control costs)
+        // Step 3: Analyze each with live data (max 5 per run)
         const toAnalyze = candidates.slice(0, Math.min(5, candidates.length));
         let budgetLeft = remaining;
 
+        // Portfolio-level risk: max 40% of budget in any single market
+        const maxSingleMarketPct = 0.4;
+        // Max number of trades per bot run
+        const maxTradesPerRun = 3;
+
         for (const market of toAnalyze) {
-            if (budgetLeft < 1) break;
+            if (budgetLeft < 1 || report.tradesExecuted >= maxTradesPerRun) break;
 
             try {
-                const analysis = await analyzeWithClaude(market, anthropicKey, riskLevel, budgetLeft, maxPerTrade);
+                // Fetch live context before analysis
+                const tokens = parseJsonSafe(market.clobTokenIds, []);
+                const yesTokenId = tokens[0] || '';
+                const liveContext = yesTokenId ? await fetchLiveContext(yesTokenId) : {};
+
+                const analysis = await analyzeWithClaude(market, anthropicKey, riskLevel, budgetLeft, maxPerTrade, liveContext);
                 report.marketsAnalyzed++;
                 report.analyses.push({
                     market: market.question,
                     marketId: market.id,
                     recommendation: analysis.recommendation,
+                    liveData: liveContext.summary || null,
                 });
 
-                // Step 4: Execute if recommendation is actionable and meets thresholds
                 const rec = analysis.recommendation;
                 if (shouldExecute(rec, riskLevel)) {
-                    const tradeAmount = calculateTradeSize(rec, budgetLeft, maxPerTrade);
+                    // Kelly-informed position sizing
+                    const tradeAmount = calculateKellySize(rec, budgetLeft, maxPerTrade, budget, maxSingleMarketPct);
 
                     if (tradeAmount >= 1) {
-                        const tokens = parseJsonSafe(market.clobTokenIds, []);
                         const prices = parseJsonSafe(market.outcomePrices, []);
                         const isYes = rec.action.includes('YES');
                         const tokenIdx = isYes ? 0 : 1;
                         const tokenId = tokens[tokenIdx] || '';
                         const price = prices[tokenIdx] ? parseFloat(prices[tokenIdx]) : 0.5;
 
+                        // Check spread is acceptable (< 5% for auto-trades)
+                        const ob = liveContext.orderBook;
+                        if (ob && ob.spreadPct > 5) {
+                            report.analyses[report.analyses.length - 1].skipped = 'spread too wide';
+                            continue;
+                        }
+
                         const trade = await executeTrade({
-                            tokenId,
-                            side: 'BUY',
-                            amount: tradeAmount,
-                            price,
+                            tokenId, side: 'BUY', amount: tradeAmount, price,
                             negRisk: market.negRisk || false,
-                            market,
-                            outcome: isYes ? 'Yes' : 'No',
-                            hasLiveCreds,
-                            dryRun,
-                            polyApiKey,
-                            polySecret,
-                            polyPassphrase,
-                            polyPrivateKey,
+                            market, outcome: isYes ? 'Yes' : 'No',
+                            hasLiveCreds, dryRun,
+                            polyApiKey, polySecret, polyPassphrase, polyPrivateKey,
                         });
 
                         report.trades.push(trade);
@@ -132,16 +129,12 @@ export default async function handler(req, res) {
                     }
                 }
             } catch (err) {
-                report.errors.push({
-                    market: market.question,
-                    error: err.message,
-                });
+                report.errors.push({ market: market.question, error: err.message });
             }
         }
 
         report.remaining = budgetLeft;
         report.completedAt = new Date().toISOString();
-
         return res.status(200).json(report);
 
     } catch (error) {
@@ -151,6 +144,8 @@ export default async function handler(req, res) {
     }
 }
 
+// ── Data Fetching ──────────────────────────────────────────
+
 async function fetchTopMarkets(limit) {
     const resp = await fetch(
         `https://gamma-api.polymarket.com/markets?limit=${limit}&active=true&closed=false&order=volume24hr&ascending=false`
@@ -159,7 +154,94 @@ async function fetchTopMarkets(limit) {
     return resp.json();
 }
 
-async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTrade) {
+async function fetchLiveContext(tokenId) {
+    const now = Math.floor(Date.now() / 1000);
+    const oneDayAgo = now - 86400;
+
+    const [bookResp, histResp] = await Promise.all([
+        fetchSafe(`https://clob.polymarket.com/book?token_id=${tokenId}`),
+        fetchSafe(`https://clob.polymarket.com/prices-history?market=${tokenId}&startTs=${oneDayAgo}&endTs=${now}&fidelity=60`),
+    ]);
+
+    const result = {};
+
+    // Summarize order book
+    if (bookResp) {
+        const bids = (bookResp.bids || []).slice(0, 10);
+        const asks = (bookResp.asks || []).slice(0, 10);
+        const bidDepth = bids.reduce((s, b) => s + parseFloat(b.size || 0), 0);
+        const askDepth = asks.reduce((s, a) => s + parseFloat(a.size || 0), 0);
+        const bestBid = bids[0] ? parseFloat(bids[0].price) : null;
+        const bestAsk = asks[0] ? parseFloat(asks[0].price) : null;
+        const spread = bestBid && bestAsk ? bestAsk - bestBid : null;
+        const mid = bestBid && bestAsk ? (bestBid + bestAsk) / 2 : bestBid || bestAsk;
+
+        result.orderBook = {
+            bestBid, bestAsk, mid, spread,
+            spreadPct: mid ? (spread / mid) * 100 : null,
+            bidDepthUsd: bidDepth, askDepthUsd: askDepth,
+            depthRatio: askDepth > 0 ? bidDepth / askDepth : null,
+        };
+    }
+
+    // Analyze price history
+    if (histResp) {
+        const history = histResp.history || histResp || [];
+        if (Array.isArray(history) && history.length > 0) {
+            const prices = history.map(p => parseFloat(p.p));
+            const current = prices[prices.length - 1];
+            const dayAgo = prices[0];
+
+            // Momentum
+            const recent = prices.slice(-Math.floor(prices.length / 4));
+            let momentum = 'flat';
+            if (recent.length >= 3) {
+                const thirdLen = Math.floor(recent.length / 3);
+                const avgFirst = recent.slice(0, thirdLen).reduce((s, p) => s + p, 0) / thirdLen;
+                const avgLast = recent.slice(-thirdLen).reduce((s, p) => s + p, 0) / thirdLen;
+                if (avgLast - avgFirst > 0.02) momentum = 'rising';
+                else if (avgLast - avgFirst < -0.02) momentum = 'falling';
+            }
+
+            // Volatility
+            const mean = prices.reduce((s, p) => s + p, 0) / prices.length;
+            const variance = prices.reduce((s, p) => s + (p - mean) ** 2, 0) / prices.length;
+
+            result.priceHistory = {
+                current,
+                change24h: current - dayAgo,
+                high24h: Math.max(...prices),
+                low24h: Math.min(...prices),
+                momentum,
+                volatility: Math.sqrt(variance),
+            };
+        }
+    }
+
+    // Compact summary for logging
+    const ob = result.orderBook;
+    const ph = result.priceHistory;
+    result.summary = [
+        ob ? `spread=${ob.spreadPct?.toFixed(1)}%` : null,
+        ob ? `depth=${ob.bidDepthUsd?.toFixed(0)}/${ob.askDepthUsd?.toFixed(0)}` : null,
+        ph ? `momentum=${ph.momentum}` : null,
+        ph ? `vol=${ph.volatility?.toFixed(3)}` : null,
+    ].filter(Boolean).join(' ');
+
+    return result;
+}
+
+async function fetchSafe(url) {
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        return resp.json();
+    } catch { return null; }
+}
+
+// ── Claude Analysis ────────────────────────────────────────
+
+async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTrade, liveContext) {
     const outcomePrices = parseJsonSafe(market.outcomePrices, []);
     const outcomes = parseJsonSafe(market.outcomes, []);
 
@@ -174,32 +256,53 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         aggressive: 'Trade with moderate confidence and >3pt edge. Larger positions OK.',
     };
 
-    const prompt = `You are an autonomous prediction market trading bot managing a $${budgetLeft.toFixed(0)} remaining budget (max $${maxPerTrade} per trade). Analyze this market and decide whether to trade.
+    // Build live data section
+    let liveSection = '';
+    const ob = liveContext?.orderBook;
+    const ph = liveContext?.priceHistory;
+
+    if (ob) {
+        liveSection += `\n## Live Order Book
+- Bid: ${ob.bestBid ? (ob.bestBid * 100).toFixed(1) + '¢' : '?'} | Ask: ${ob.bestAsk ? (ob.bestAsk * 100).toFixed(1) + '¢' : '?'} | Spread: ${ob.spreadPct ? ob.spreadPct.toFixed(1) + '%' : '?'}
+- Bid depth: $${ob.bidDepthUsd?.toFixed(0) || '?'} | Ask depth: $${ob.askDepthUsd?.toFixed(0) || '?'}
+- Depth ratio: ${ob.depthRatio?.toFixed(2) || '?'} ${ob.depthRatio > 1.5 ? '(buying pressure)' : ob.depthRatio < 0.67 ? '(selling pressure)' : '(balanced)'}`;
+    }
+
+    if (ph) {
+        liveSection += `\n## 24h Price Action
+- Current: ${(ph.current * 100).toFixed(1)}¢ | Change: ${ph.change24h > 0 ? '+' : ''}${(ph.change24h * 100).toFixed(1)}¢
+- High: ${(ph.high24h * 100).toFixed(1)}¢ | Low: ${(ph.low24h * 100).toFixed(1)}¢
+- Momentum: ${ph.momentum} | Volatility: ${ph.volatility < 0.02 ? 'low' : ph.volatility < 0.05 ? 'moderate' : 'high'}`;
+    }
+
+    const prompt = `You are an autonomous prediction market trading bot managing $${budgetLeft.toFixed(0)} remaining (max $${maxPerTrade}/trade). Analyze this market using the live data.
 
 ## Market
 **Question:** ${market.question}
 **Description:** ${market.description || 'N/A'}
 **End Date:** ${market.endDate || 'Unknown'}
-**Volume:** $${formatNum(market.volume)} | **Liquidity:** $${formatNum(market.liquidity)}
+**Volume:** $${formatNum(market.volume)} | **24h Vol:** $${formatNum(market.volume24hr)} | **Liquidity:** $${formatNum(market.liquidity)}
 
 ## Prices
 ${outcomeSummary}
+${liveSection}
 
 ## Rules
 ${riskMap[riskLevel] || riskMap.moderate}
 - You MUST be selective. Only trade when you see genuine mispricing.
-- Consider: Is the market pricing this correctly? What does the market NOT know?
-- Think about base rates, recent news, and structural factors.
+- Factor in: spread cost, order book depth (can you fill without moving the market?), and momentum direction.
+- If the spread is >3%, that eats into your edge — account for it.
+- If momentum conflicts with your thesis, reduce confidence.
 
 ## Response (JSON only)
-Respond with ONLY a JSON object, no markdown:
 {
   "action": "BUY YES" | "BUY NO" | "HOLD",
   "confidence": "Low" | "Medium" | "High",
-  "edgePercent": <number — your estimated edge in percentage points>,
-  "reasoning": "<1-2 sentences>",
+  "edgePercent": <your estimated edge in percentage points AFTER spread costs>,
+  "reasoning": "<2-3 sentences including what the live data tells you>",
   "suggestedSize": "Small" | "Medium" | "Large",
-  "myProbability": <number 0-100 — your estimated YES probability>
+  "myProbability": <0-100>,
+  "spreadAdjustedEdge": <edge minus half the spread>
 }`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -211,7 +314,7 @@ Respond with ONLY a JSON object, no markdown:
         },
         body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 500,
+            max_tokens: 600,
             messages: [{ role: 'user', content: prompt }],
         }),
     });
@@ -224,43 +327,52 @@ Respond with ONLY a JSON object, no markdown:
     const data = await resp.json();
     const text = data.content?.[0]?.text || '{}';
 
-    // Parse JSON from response — handle markdown code blocks
     let recommendation;
     try {
         const jsonStr = text.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
         recommendation = JSON.parse(jsonStr);
     } catch {
-        recommendation = { action: 'HOLD', confidence: 'Low', reasoning: 'Failed to parse response', edgePercent: 0 };
+        recommendation = { action: 'HOLD', confidence: 'Low', reasoning: 'Failed to parse', edgePercent: 0 };
     }
 
     return { recommendation, usage: data.usage };
 }
 
+// ── Trade Execution Logic ──────────────────────────────────
+
 function shouldExecute(rec, riskLevel) {
     if (!rec || rec.action === 'HOLD') return false;
 
-    const edge = Math.abs(rec.edgePercent || 0);
+    // Use spread-adjusted edge when available
+    const edge = Math.abs(rec.spreadAdjustedEdge || rec.edgePercent || 0);
     const conf = (rec.confidence || '').toLowerCase();
 
-    if (riskLevel === 'conservative') {
-        return conf === 'high' && edge >= 10;
-    }
-    if (riskLevel === 'moderate') {
-        return (conf === 'high' || conf === 'medium') && edge >= 5;
-    }
-    // aggressive
-    return conf !== 'low' && edge >= 3;
+    if (riskLevel === 'conservative') return conf === 'high' && edge >= 10;
+    if (riskLevel === 'moderate') return (conf === 'high' || conf === 'medium') && edge >= 5;
+    return conf !== 'low' && edge >= 3; // aggressive
 }
 
-function calculateTradeSize(rec, budgetLeft, maxPerTrade) {
-    const sizeMap = { Small: 0.1, Medium: 0.2, Large: 0.4 };
-    const fraction = sizeMap[rec.suggestedSize] || 0.1;
+function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSinglePct) {
+    const prob = (rec.myProbability || 50) / 100;
+    const edge = Math.abs(rec.spreadAdjustedEdge || rec.edgePercent || 0) / 100;
 
-    // Scale by confidence
-    const confMultiplier = rec.confidence === 'High' ? 1.5 : rec.confidence === 'Medium' ? 1.0 : 0.5;
+    // Kelly fraction: f* = (bp - q) / b where b = odds, p = prob, q = 1-p
+    // For binary markets with cost = price: simplified Kelly
+    // Use half-Kelly for safety
+    const price = prob; // approximate
+    const odds = (1 / price) - 1; // payout odds
+    const kellyFraction = odds > 0 ? ((odds * prob - (1 - prob)) / odds) : 0;
+    const halfKelly = Math.max(0, kellyFraction / 2);
 
-    let amount = Math.round(maxPerTrade * fraction * confMultiplier);
-    amount = Math.min(amount, maxPerTrade, budgetLeft);
+    // Constrain by confidence
+    const confMultiplier = rec.confidence === 'High' ? 1.0 : rec.confidence === 'Medium' ? 0.6 : 0.3;
+
+    // Start with Kelly-based size, constrained by maxPerTrade
+    let amount = Math.round(maxPerTrade * Math.min(halfKelly * 10, 1) * confMultiplier);
+
+    // Enforce portfolio-level cap
+    const maxSingle = totalBudget * maxSinglePct;
+    amount = Math.min(amount, maxPerTrade, budgetLeft, maxSingle);
     amount = Math.max(amount, 0);
 
     return amount;
@@ -277,11 +389,7 @@ async function executeTrade(params) {
 
     const tradeRecord = {
         id: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        tokenId,
-        side,
-        amount,
-        price,
-        shares,
+        tokenId, side, amount, price, shares,
         market: market.question,
         marketId: market.id,
         outcome,
@@ -297,7 +405,6 @@ async function executeTrade(params) {
 
     if (hasLiveCreds) {
         try {
-            // Get real-time price
             let tradePrice;
             try {
                 tradePrice = await getMidpoint(tokenId);
@@ -305,7 +412,8 @@ async function executeTrade(params) {
                 tradePrice = price;
             }
 
-            const slippagePrice = Math.min(tradePrice * 1.02, 0.99); // 2% slippage for auto
+            // 2% slippage for auto-trades
+            const slippagePrice = Math.min(tradePrice * 1.02, 0.99);
 
             const order = buildMarketOrder({
                 tokenId, side, amount, price: slippagePrice, negRisk,
@@ -320,7 +428,6 @@ async function executeTrade(params) {
             tradeRecord.clobOrderId = result.orderID || result.id;
             tradeRecord.executedPrice = tradePrice;
             tradeRecord.shares = amount / tradePrice;
-
         } catch (err) {
             tradeRecord.status = 'failed';
             tradeRecord.error = err.message;
@@ -334,11 +441,12 @@ async function executeTrade(params) {
     return tradeRecord;
 }
 
+// ── Utilities ──────────────────────────────────────────────
+
 function parseJsonSafe(val, fallback) {
     if (Array.isArray(val)) return val;
     if (typeof val === 'string') {
-        try { return JSON.parse(val); }
-        catch { return fallback; }
+        try { return JSON.parse(val); } catch { return fallback; }
     }
     return fallback;
 }
