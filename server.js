@@ -89,8 +89,8 @@ function runInWorker(handlerPath, reqData) {
 
         const timeout = setTimeout(() => {
             child.kill();
-            reject(new Error('API handler timed out after 5min'));
-        }, 300000);
+            reject(new Error('API handler timed out after 20min'));
+        }, 1200000);
 
         child.on('message', (msg) => {
             clearTimeout(timeout);

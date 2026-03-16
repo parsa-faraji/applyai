@@ -111,7 +111,7 @@ async function runCycle() {
     // 4. Trading Bot (Bull vs Bear)
     log('  Running Trading Bot...');
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
-        budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 1,
+        budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
     });
     if (bot) {
         log(`  Bot: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades`);
