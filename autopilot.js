@@ -34,7 +34,7 @@ if (fs.existsSync(envPath)) {
 
 const PORT = process.env.PORT || 3000;
 const SERVER = process.env.SERVER_URL || `http://localhost:${PORT}`;
-const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '5') * 60 * 1000;
+const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '10') * 60 * 1000;
 
 const HEADERS = {
     'Content-Type': 'application/json',
@@ -149,7 +149,7 @@ async function runCycle() {
 
     // 7. Full position assessment (every 6th cycle = ~30min)
     cycleCount++;
-    if (cycleCount % 2 === 0 && positions.length > 0) {
+    if (cycleCount % 3 === 0 && positions.length > 0) {
         log('  Running Full Assessment...');
         const assess = await callEndpoint('Assess', '/api/kalshi-assess', { positions });
         if (assess) {
