@@ -84,6 +84,15 @@ async function runCycle() {
         log(`  Kalshi: $${cash} cash, $${total} total, ${sync.positions?.length || 0} positions, ${sync.openOrders || 0} resting`);
     }
 
+    // 1b. Cancel stale resting orders (older than 15 min)
+    if (sync?.openOrders > 0) {
+        log('  Cleaning up stale resting orders...');
+        const cleanup = await callEndpoint('Cleanup', '/api/kalshi-cleanup', { maxAgeMinutes: 15 });
+        if (cleanup) {
+            log(`  Cleanup: ${cleanup.cancelled || 0} cancelled, ${cleanup.kept || 0} kept`);
+        }
+    }
+
     // 2. Safe Compounder
     log('  Running Safe Compounder...');
     const safe = await callEndpoint('Safe Compounder', '/api/kalshi-safe-compounder', {
