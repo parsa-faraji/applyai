@@ -38,17 +38,57 @@ export default async function handler(req, res) {
             const createdAt = new Date(order.created_time || 0).getTime();
             const age = now - createdAt;
             const ageMin = Math.round(age / 60000);
+            const ticker = order.ticker || '';
+            const orderPrice = parseFloat(order.yes_price_dollars || order.no_price_dollars || '0') * 100;
+            const side = (order.side || 'yes').toLowerCase();
+            const action = (order.action || 'buy').toLowerCase();
 
-            if (age > maxAge) {
+            // If order is young, always keep
+            if (age <= maxAge) {
+                results.push({ ticker, age: ageMin, status: 'kept', reason: 'young' });
+                continue;
+            }
+
+            // Check current market price to see if order is close to filling
+            let shouldCancel = true;
+            let reason = 'stale price';
+            try {
+                const marketData = await authFetch('GET', `/markets/${ticker}`, { apiKeyId: creds.apiKeyId, privateKeyPem: creds.privateKeyPem }).catch(() => null);
+                if (marketData) {
+                    const lastPrice = parseFloat(marketData.market?.last_price_dollars || marketData.last_price_dollars || '0') * 100;
+                    const priceDiff = Math.abs(orderPrice - lastPrice);
+
+                    // Keep if order price is within 5¢ of market (close to filling)
+                    if (priceDiff <= 5) {
+                        shouldCancel = false;
+                        reason = `close to market (${priceDiff.toFixed(0)}¢ away)`;
+                    }
+                    // Keep if it's a buy below market (good limit order waiting for dip)
+                    else if (action === 'buy' && orderPrice < lastPrice) {
+                        shouldCancel = false;
+                        reason = `buy order below market (${priceDiff.toFixed(0)}¢ below)`;
+                    }
+                    // Keep if it's a sell above market (good limit order waiting for spike)
+                    else if (action === 'sell' && orderPrice > lastPrice) {
+                        shouldCancel = false;
+                        reason = `sell order above market (${priceDiff.toFixed(0)}¢ above)`;
+                    } else {
+                        reason = `${priceDiff.toFixed(0)}¢ from market, wrong side`;
+                    }
+                }
+            } catch {}
+
+            // Only cancel if price is truly stale AND order is old
+            if (shouldCancel && age > maxAge * 2) {
                 try {
                     await authFetch('DELETE', `/portfolio/orders/${order.order_id}`, creds);
                     cancelled++;
-                    results.push({ orderId: order.order_id, ticker: order.ticker, age: ageMin, status: 'cancelled' });
+                    results.push({ ticker, age: ageMin, status: 'cancelled', reason });
                 } catch (err) {
-                    results.push({ orderId: order.order_id, ticker: order.ticker, age: ageMin, status: 'failed', error: err.message });
+                    results.push({ ticker, age: ageMin, status: 'failed', error: err.message });
                 }
             } else {
-                results.push({ orderId: order.order_id, ticker: order.ticker, age: ageMin, status: 'kept' });
+                results.push({ ticker, age: ageMin, status: 'kept', reason });
             }
         }
 

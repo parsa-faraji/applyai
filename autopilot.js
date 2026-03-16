@@ -54,7 +54,22 @@ function log(msg) {
     console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 }
 
+// Track stats across cycles
+const stats = {
+    startBalance: null,
+    currentBalance: null,
+    totalTrades: 0,
+    totalSells: 0,
+    totalBuys: 0,
+    estimatedApiCost: 0,
+    cyclesRun: 0,
+    startTime: Date.now(),
+};
+
 async function callEndpoint(name, path, body = {}) {
+    // Estimate API cost per endpoint
+    const costMap = { 'Safe Compounder': 0.05, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50 };
+    stats.estimatedApiCost += costMap[name] || 0;
     try {
         const resp = await fetch(`${SERVER}${path}`, {
             method: 'POST',
@@ -79,9 +94,18 @@ async function runCycle() {
     // 1. Sync positions
     const sync = await callEndpoint('Sync', '/api/kalshi-sync');
     if (sync) {
-        const cash = sync.balance?.toFixed(2) || '?';
-        const total = ((sync.balance || 0) + (sync.portfolioValue || 0)).toFixed(2);
-        log(`  Kalshi: $${cash} cash, $${total} total, ${sync.positions?.length || 0} positions, ${sync.openOrders || 0} resting`);
+        const currentTotal = (sync.balance || 0) + (sync.portfolioValue || 0);
+        if (stats.startBalance === null) stats.startBalance = currentTotal;
+        stats.currentBalance = currentTotal;
+        stats.cyclesRun++;
+
+        const pnl = currentTotal - stats.startBalance;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const runtime = ((Date.now() - stats.startTime) / 3600000).toFixed(1);
+        const realizedPnl = sync.realizedPnl ? ` | Realized P&L: $${sync.realizedPnl.toFixed(2)}` : '';
+
+        log(`  Kalshi: $${(sync.balance || 0).toFixed(2)} cash, $${currentTotal.toFixed(2)} total, ${sync.positions?.length || 0} positions, ${sync.openOrders || 0} resting`);
+        log(`  Session: ${pnlStr} since start | Est. API cost: $${stats.estimatedApiCost.toFixed(2)} | Runtime: ${runtime}h | Cycles: ${stats.cyclesRun}${realizedPnl}`);
     }
 
     // 1b. Cancel stale resting orders (older than 15 min)
@@ -123,7 +147,9 @@ async function runCycle() {
         budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
     });
     if (bot) {
-        log(`  Bot: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades`);
+        stats.totalTrades += bot.tradesExecuted || 0;
+        stats.totalBuys += bot.tradesExecuted || 0;
+        log(`  Bot: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
         for (const t of (bot.trades || [])) {
             log(`    → ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
         }
