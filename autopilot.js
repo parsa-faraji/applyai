@@ -149,7 +149,7 @@ async function runCycle() {
 
     // 7. Full position assessment (every 6th cycle = ~30min)
     cycleCount++;
-    if (cycleCount % 6 === 0 && positions.length > 0) {
+    if (cycleCount % 2 === 0 && positions.length > 0) {
         log('  Running Full Assessment...');
         const assess = await callEndpoint('Assess', '/api/kalshi-assess', { positions });
         if (assess) {
