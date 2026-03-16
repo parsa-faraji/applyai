@@ -82,14 +82,17 @@ export default async function handler(req, res) {
             // Skip multivariate/parlay markets
             if (/^(yes|no)\s/i.test(t)) return false;
             if ((t.match(/,/g) || []).length >= 2 && /\d+\+/.test(t)) return false;
-            // Skip first-goalscorer and player prop lottery tickets
+            // Skip first-goalscorer (true lottery — random who scores first)
             if (/first goal/i.test(t)) return false;
             if (/first scorer/i.test(t)) return false;
-            if (/\d+\+ (points|goals|assists|rebounds|strikeouts)/i.test(t)) return false;
+            // Skip triple doubles (too rare/random)
             if (/triple double/i.test(t)) return false;
-            // Skip contracts priced below 15¢ (lottery tickets, favourite-longshot bias)
+            // Keep basketball/football point props (player scoring history = real edge)
+            // but skip obscure stat props
+            if (/\d+\+ (goals|strikeouts|saves|home runs)/i.test(t)) return false;
+            // Skip contracts priced below 20¢ or above 80¢ (favourite-longshot bias)
             const price = parseFloat(m.last_price_dollars || '0.5');
-            if (price < 0.15 || price > 0.85) return false;
+            if (price < 0.20 || price > 0.80) return false;
             return true;
         });
 
