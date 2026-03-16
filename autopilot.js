@@ -34,7 +34,7 @@ if (fs.existsSync(envPath)) {
 
 const PORT = process.env.PORT || 3000;
 const SERVER = process.env.SERVER_URL || `http://localhost:${PORT}`;
-const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '10') * 60 * 1000;
+const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '5') * 60 * 1000;
 
 const HEADERS = {
     'Content-Type': 'application/json',
