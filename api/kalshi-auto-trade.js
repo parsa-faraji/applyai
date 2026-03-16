@@ -85,6 +85,8 @@ export default async function handler(req, res) {
             // Skip first-goalscorer (true lottery — random who scores first)
             if (/first goal/i.test(t)) return false;
             if (/first scorer/i.test(t)) return false;
+            // Skip "what will X say" markets (vague, coin flip, Claude admits no edge)
+            if (/what will .+ say/i.test(t)) return false;
             // Skip triple doubles (too rare/random)
             if (/triple double/i.test(t)) return false;
             // Keep basketball/football point props (player scoring history = real edge)
