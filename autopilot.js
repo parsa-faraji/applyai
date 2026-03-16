@@ -147,21 +147,6 @@ async function runCycle() {
         }
     }
 
-    // 7. Full position assessment (every 6th cycle = ~30min)
-    cycleCount++;
-    if (cycleCount % 3 === 0 && positions.length > 0) {
-        log('  Running Full Assessment...');
-        const assess = await callEndpoint('Assess', '/api/kalshi-assess', { positions });
-        if (assess) {
-            log(`  Assessment: Grade ${assess.summary?.avgGrade || '?'} | ${assess.summary?.sellRecommendations || 0} sell recs | ${assess.summary?.noEdgePositions || 0} no-edge`);
-            for (const a of (assess.assessments || [])) {
-                if (a.recommendation === 'SELL') {
-                    log(`    🔴 [${a.grade}] SELL: ${a.market?.slice(0, 45)} — ${a.reasoning}`);
-                }
-            }
-        }
-    }
-
     log('═══ Cycle complete ═══\n');
 }
 
