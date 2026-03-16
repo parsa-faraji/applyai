@@ -32,7 +32,8 @@ if (fs.existsSync(envPath)) {
     }
 }
 
-const SERVER = process.env.SERVER_URL || 'http://localhost:3000';
+const PORT = process.env.PORT || 3000;
+const SERVER = process.env.SERVER_URL || `http://localhost:${PORT}`;
 const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '10') * 60 * 1000;
 
 const HEADERS = {
