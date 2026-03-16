@@ -79,8 +79,17 @@ export default async function handler(req, res) {
         // Filter out multivariate events (parlays) that slip past mve_filter
         const allMarkets = (data.markets || []).filter(m => {
             const t = m.title || '';
+            // Skip multivariate/parlay markets
             if (/^(yes|no)\s/i.test(t)) return false;
             if ((t.match(/,/g) || []).length >= 2 && /\d+\+/.test(t)) return false;
+            // Skip first-goalscorer and player prop lottery tickets
+            if (/first goal/i.test(t)) return false;
+            if (/first scorer/i.test(t)) return false;
+            if (/\d+\+ (points|goals|assists|rebounds|strikeouts)/i.test(t)) return false;
+            if (/triple double/i.test(t)) return false;
+            // Skip contracts priced below 15¢ (lottery tickets, favourite-longshot bias)
+            const price = parseFloat(m.last_price_dollars || '0.5');
+            if (price < 0.15 || price > 0.85) return false;
             return true;
         });
 
@@ -168,7 +177,7 @@ export default async function handler(req, res) {
                             priceCents = noAsk ? noAsk + 1 : (rawMarket.no_ask_dollars ? Math.round(parseFloat(rawMarket.no_ask_dollars) * 100) + 1 : 50);
                         }
                         priceCents = Math.min(priceCents, 99); // cap at 99¢
-                        const contracts = Math.floor((tradeAmount * 100) / priceCents); // Kalshi prices in cents
+                        const contracts = Math.min(20, Math.floor((tradeAmount * 100) / priceCents)); // Max 20 contracts per order
 
                         if (contracts < 1) continue;
 
