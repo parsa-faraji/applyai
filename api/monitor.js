@@ -9,6 +9,7 @@ import { getMidpoint, getBestPrice } from './lib/clob.js';
 import { getOrderBook as getKalshiOrderBook, summarizeOrderBook as summarizeKalshiOB, getMarket as getKalshiMarket } from './lib/kalshi.js';
 import { searchNews } from './lib/search.js';
 import { getAllSportsOdds, findMatchingOdds, formatOddsForPrompt } from './lib/odds.js';
+import { getSportsContext } from './lib/sports.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -322,15 +323,24 @@ function cents(price) {
  * Returns { action: 'SELL' | 'HOLD', reasoning: string }
  */
 async function smartExitAnalysis(pos, livePrice, pnlPct, entryPrice, triggerType, triggerMsg, anthropicKey, braveKey, oddsKey) {
-    // Gather context: news + odds
+    // Gather ALL context: news + odds + live sports + economic + weather
     let context = '';
 
-    try {
-        const news = await searchNews(pos.market, { braveKey }).catch(() => null);
-        if (news?.headlines?.length > 0) {
-            context += '\n## Recent News\n' + news.headlines.map((h, i) => `- ${h}${news.snippets?.[i] ? ': ' + news.snippets[i] : ''}`).join('\n');
-        }
-    } catch {}
+    // All data sources in parallel
+    const [news, sportsCtx, econCtx, weatherCtx] = await Promise.all([
+        searchNews(pos.market, { braveKey }).catch(() => null),
+        getSportsContext(pos.market).catch(() => ''),
+        import('./lib/fred.js').then(m => m.getEconomicContext(pos.market)).catch(() => ''),
+        import('./lib/noaa.js').then(m => m.getWeatherContext(pos.market)).catch(() => ''),
+    ]);
+
+    if (news?.headlines?.length > 0) {
+        context += '\n## Recent News\n' + news.headlines.map((h, i) => `- ${h}${news.snippets?.[i] ? ': ' + news.snippets[i] : ''}`).join('\n');
+    }
+
+    if (sportsCtx) context += '\n## Live Sports Data\n' + sportsCtx;
+    if (econCtx) context += '\n## Economic Data\n' + econCtx;
+    if (weatherCtx) context += '\n## Weather Data\n' + weatherCtx;
 
     if (oddsKey) {
         try {
