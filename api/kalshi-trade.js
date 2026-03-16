@@ -42,12 +42,23 @@ async function executeLiveTrade(res, params) {
     const { ticker, side, action, count, price, maxCost, apiKeyId, privateKeyPem } = params;
 
     try {
-        // Get order book for best price if none specified
+        const isSell = action.toLowerCase() === 'sell';
+        const obData = await getOrderBook(ticker);
+        const ob = summarizeOrderBook(obData);
+
+        // For sells: use best bid (hit existing buyers) so order fills immediately
+        // For buys: use best ask or specified price
         let tradePrice = price;
         if (!tradePrice) {
-            const obData = await getOrderBook(ticker);
-            const ob = summarizeOrderBook(obData);
-            tradePrice = ob?.midpoint || 50; // cents
+            if (isSell) {
+                // Sell at best bid — this fills immediately instead of resting
+                tradePrice = ob?.bestYesBid || ob?.midpoint || 50;
+            } else {
+                tradePrice = ob?.bestYesAsk || ob?.midpoint || 50;
+            }
+        } else if (isSell && ob?.bestYesBid) {
+            // Even if price specified, don't sell above best bid (it won't fill)
+            tradePrice = Math.min(tradePrice, ob.bestYesBid);
         }
 
         const order = {

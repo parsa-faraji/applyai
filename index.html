@@ -120,10 +120,21 @@
                             </div>
                         </div>
                         <div class="bot-actions">
-                            <button class="btn btn-primary btn-lg" id="runBotBtn">Run Trading Bot</button>
-                            <button class="btn btn-secondary" id="dryRunBtn">Dry Run (no real trades)</button>
-                            <button class="btn btn-green btn-sm" id="startMonitorBtn">Start Monitor</button>
-                            <button class="btn btn-red btn-sm" id="stopMonitorBtn" style="display:none;">Stop Monitor</button>
+                            <button class="btn btn-primary btn-lg" id="autopilotBtn">Start Autopilot</button>
+                            <button class="btn btn-red btn-lg" id="stopAutopilotBtn" style="display:none;">Stop Autopilot</button>
+                            <button class="btn btn-secondary btn-sm" id="syncPositionsBtn">Sync from Kalshi</button>
+                            <button class="btn btn-secondary btn-sm" id="assessTradesBtn">Assess Trades</button>
+                            <details style="margin-top: 0.5rem;">
+                                <summary style="cursor:pointer; opacity: 0.6; font-size: 0.85rem;">Run individually</summary>
+                                <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                    <button class="btn btn-secondary btn-sm" id="runBotBtn">Trading Bot</button>
+                                    <button class="btn btn-secondary btn-sm" id="safeCompBtn">Safe Compounder</button>
+                                    <button class="btn btn-secondary btn-sm" id="marketMakerBtn">Market Maker</button>
+                                    <button class="btn btn-secondary btn-sm" id="dryRunBtn">Dry Run</button>
+                                    <button class="btn btn-green btn-sm" id="startMonitorBtn">Monitor Only</button>
+                                    <button class="btn btn-red btn-sm" id="stopMonitorBtn" style="display:none;">Stop Monitor</button>
+                                </div>
+                            </details>
                         </div>
                         <div id="monitorAlerts" class="monitor-alerts" style="display:none;"></div>
                         <div id="botLog" class="bot-log" style="display:none;"></div>
@@ -132,22 +143,18 @@
 
                 <div class="panel portfolio-summary">
                     <h2>Portfolio Overview</h2>
-                    <div class="stats-grid">
+                    <div class="stats-grid" id="kalshiAccountRow" style="display:none; margin-bottom: 1rem;">
                         <div class="stat-card">
-                            <span class="stat-label">Total Invested</span>
-                            <span class="stat-value" id="totalInvested">$0.00</span>
+                            <span class="stat-label">Kalshi Cash</span>
+                            <span class="stat-value" id="kalshiCash">—</span>
                         </div>
                         <div class="stat-card">
-                            <span class="stat-label">Current Value</span>
-                            <span class="stat-value" id="currentValue">$0.00</span>
+                            <span class="stat-label">Kalshi Total</span>
+                            <span class="stat-value" id="kalshiTotal">—</span>
                         </div>
                         <div class="stat-card">
-                            <span class="stat-label">Total P&L</span>
-                            <span class="stat-value" id="totalPnl">$0.00</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">Win Rate</span>
-                            <span class="stat-value" id="winRate">&mdash;</span>
+                            <span class="stat-label">Realized P&L</span>
+                            <span class="stat-value" id="kalshiPnl">—</span>
                         </div>
                     </div>
                 </div>
@@ -189,7 +196,23 @@
                         <div class="form-group">
                             <label for="braveApiKey">Brave Search API Key (optional)</label>
                             <input type="password" id="braveApiKey" class="form-input" placeholder="BSA...">
-                            <span class="form-hint">For live news context. Free at search.brave.com/api. Falls back to search if empty.</span>
+                            <span class="form-hint">For live news context. Free at search.brave.com/api.</span>
+
+                            <label for="oddsApiKey">The Odds API Key (optional)</label>
+                            <input type="password" id="oddsApiKey" class="form-input" placeholder="Your Odds API key">
+                            <span class="form-hint">Real-time bookmaker odds for sports. Free at the-odds-api.com.</span>
+
+                            <label for="sportsApiKey">API-Sports Key (optional)</label>
+                            <input type="password" id="sportsApiKey" class="form-input" placeholder="Your API-Sports key">
+                            <span class="form-hint">Live scores, injuries, lineups. $10/mo at api-sports.io. ESPN free data used by default.</span>
+
+                            <label for="fredApiKey">FRED API Key (free)</label>
+                            <input type="password" id="fredApiKey" class="form-input" placeholder="Your FRED API key">
+                            <span class="form-hint">Economic data (CPI, jobs, GDP). Free at fred.stlouisfed.org/docs/api/api_key.html</span>
+
+                            <label for="openrouterKey">OpenRouter API Key (optional)</label>
+                            <input type="password" id="openrouterKey" class="form-input" placeholder="sk-or-...">
+                            <span class="form-hint">Multi-LLM ensemble (GPT-4o, Gemini, DeepSeek). ~$0.05/analysis. openrouter.ai</span>
                         </div>
 
                         <!-- Kalshi credentials (shown when Kalshi selected) -->

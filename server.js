@@ -2,16 +2,21 @@
  * Simple local dev server — no Vercel CLI needed.
  * Serves static files + routes /api/* to serverless functions.
  *
+ * Each API request runs in a forked child process so that module
+ * changes are always picked up without restarting the server.
+ *
  * Usage: node server.js
  */
 
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { fork } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
+const WORKER = path.join(__dirname, '_api-worker.js');
 
 const MIME = {
     '.html': 'text/html',
@@ -26,51 +31,30 @@ const MIME = {
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
-    // API routes — dynamically import the handler
+    // API routes — run handler in a fresh child process (no module cache)
     if (url.pathname.startsWith('/api/')) {
         const handlerPath = path.join(__dirname, url.pathname + '.js');
+        if (!fs.existsSync(handlerPath)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'API route not found' }));
+        }
+
         try {
-            if (!fs.existsSync(handlerPath)) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'API route not found' }));
-            }
+            const body = (req.method === 'POST' || req.method === 'PUT')
+                ? await parseBody(req)
+                : {};
 
-            // Build req-like object with query, body, headers
-            const mod = await import(handlerPath + '?t=' + Date.now());
-            const handler = mod.default;
+            const result = await runInWorker(handlerPath, {
+                method: req.method,
+                headers: req.headers,
+                query: Object.fromEntries(url.searchParams),
+                body,
+            });
 
-            // Parse query string
-            req.query = Object.fromEntries(url.searchParams);
-
-            // Parse body for POST
-            if (req.method === 'POST' || req.method === 'PUT') {
-                req.body = await parseBody(req);
-            }
-
-            // Shim res.status().json()
-            const origWriteHead = res.writeHead.bind(res);
-            res.status = (code) => {
-                res.statusCode = code;
-                return {
-                    json: (data) => {
-                        res.writeHead(code, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify(data));
-                    },
-                    end: (data) => {
-                        res.writeHead(code);
-                        res.end(data);
-                    },
-                };
-            };
-            // Also shim res.json directly
-            res.json = (data) => {
-                if (!res.headersSent) res.writeHead(res.statusCode || 200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(data));
-            };
-
-            await handler(req, res);
+            res.writeHead(result.statusCode || 200, result.headers || { 'Content-Type': 'application/json' });
+            res.end(result.body || '');
         } catch (err) {
-            console.error(`API error [${url.pathname}]:`, err);
+            console.error(`API error [${url.pathname}]:`, err.message);
             if (!res.headersSent) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: err.message }));
@@ -93,6 +77,46 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': contentType });
     res.end(content);
 });
+
+/**
+ * Fork a child process to run the API handler with fresh modules.
+ */
+function runInWorker(handlerPath, reqData) {
+    return new Promise((resolve, reject) => {
+        const child = fork(WORKER, [], {
+            stdio: ['pipe', 'inherit', 'inherit', 'ipc'],
+        });
+
+        const timeout = setTimeout(() => {
+            child.kill();
+            reject(new Error('API handler timed out after 5min'));
+        }, 300000);
+
+        child.on('message', (msg) => {
+            clearTimeout(timeout);
+            if (msg.error) {
+                reject(new Error(msg.error));
+            } else {
+                resolve(msg);
+            }
+            child.kill();
+        });
+
+        child.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+        });
+
+        child.on('exit', (code) => {
+            clearTimeout(timeout);
+            if (code && code !== 0) {
+                reject(new Error(`Worker exited with code ${code}`));
+            }
+        });
+
+        child.send({ handlerPath, ...reqData });
+    });
+}
 
 function parseBody(req) {
     return new Promise((resolve) => {

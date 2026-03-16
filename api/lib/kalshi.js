@@ -87,14 +87,69 @@ async function kalshiPublicFetch(path) {
  * @returns {object} { markets: [...], cursor: string }
  */
 export async function getMarkets(params = {}) {
-    const qs = new URLSearchParams();
-    if (params.limit) qs.set('limit', params.limit);
-    if (params.cursor) qs.set('cursor', params.cursor);
-    if (params.event_ticker) qs.set('event_ticker', params.event_ticker);
-    if (params.series_ticker) qs.set('series_ticker', params.series_ticker);
-    if (params.status) qs.set('status', params.status);
-    const query = qs.toString();
-    return kalshiPublicFetch(`/markets${query ? '?' + query : ''}`);
+    // Fast path: specific filter or cursor-based pagination (used by markets listing page)
+    if (params.series_ticker || params.event_ticker || params.cursor || !params._smartSort) {
+        const qs = new URLSearchParams();
+        qs.set('mve_filter', 'exclude');
+        if (params.limit) qs.set('limit', params.limit);
+        if (params.cursor) qs.set('cursor', params.cursor);
+        if (params.event_ticker) qs.set('event_ticker', params.event_ticker);
+        if (params.series_ticker) qs.set('series_ticker', params.series_ticker);
+        if (params.status) qs.set('status', params.status);
+        const query = qs.toString();
+        return kalshiPublicFetch(`/markets${query ? '?' + query : ''}`);
+    }
+
+    // Paginate through /markets to find the most active short-term markets.
+    // Default sort returns newest first (mostly dead sports), so we fetch
+    // many pages and sort client-side by volume + OI.
+    const limit = params.limit || 50;
+    const allMarkets = [];
+    let cursor = '';
+    const maxPages = 5; // 5 pages × 200 = 1000 markets scanned
+
+    for (let i = 0; i < maxPages; i++) {
+        const qs = new URLSearchParams();
+        qs.set('mve_filter', 'exclude');
+        qs.set('limit', '200');
+        qs.set('status', 'open');
+        if (cursor) qs.set('cursor', cursor);
+        const data = await kalshiPublicFetch(`/markets?${qs.toString()}`);
+        const batch = data.markets || [];
+        allMarkets.push(...batch);
+        cursor = data.cursor || '';
+        if (batch.length < 200 || !cursor) break;
+    }
+
+    // Prefer short-term markets (today/tomorrow), only fall back to longer-term
+    const now = Date.now();
+    const withExpiry = allMarkets.map(m => {
+        const exp = Date.parse(m.expected_expiration_time || m.close_time || '2099-01-01');
+        const hours = Math.max(0, (exp - now) / 3600000);
+        const activity = parseFloat(m.volume_24h_fp || '0') + parseFloat(m.open_interest_fp || '0');
+        return { m, hours, activity };
+    });
+
+    // Tier 1: expires within 36h (today/tonight)
+    // Tier 2: expires within 72h (tomorrow)
+    // Tier 3: everything else (only if not enough short-term)
+    const tier1 = withExpiry.filter(x => x.hours <= 36).sort((a, b) => b.activity - a.activity);
+    const tier2 = withExpiry.filter(x => x.hours > 36 && x.hours <= 72).sort((a, b) => b.activity - a.activity);
+    const tier3 = withExpiry.filter(x => x.hours > 72).sort((a, b) => b.activity - a.activity);
+
+    // Fill from short-term first, then expand if needed
+    const picked = [...tier1, ...tier2, ...tier3]
+        .filter(x => x.activity > 0) // must have some trading activity
+        .slice(0, limit)
+        .map(x => x.m);
+
+    // If we couldn't find enough active short-term markets, pad with inactive short-term
+    if (picked.length < limit) {
+        const inactive = [...tier1, ...tier2].filter(x => x.activity === 0).slice(0, limit - picked.length).map(x => x.m);
+        picked.push(...inactive);
+    }
+
+    return { markets: picked.slice(0, limit) };
 }
 
 /**
@@ -230,7 +285,18 @@ export function summarizeOrderBook(data) {
  */
 export function normalizeMarket(kalshiMarket) {
     const m = kalshiMarket;
-    const yesPrice = m.yes_bid != null ? m.yes_bid / 100 : (m.last_price != null ? m.last_price / 100 : 0.5);
+    // Kalshi API returns prices as dollar strings with _dollars suffix (e.g. "0.8300")
+    // and volumes/OI with _fp suffix (e.g. "1000.00")
+    const yesBid = parseFloat(m.yes_bid_dollars) || null;
+    const yesAsk = parseFloat(m.yes_ask_dollars) || null;
+    const noBid = parseFloat(m.no_bid_dollars) || null;
+    const noAsk = parseFloat(m.no_ask_dollars) || null;
+    const lastPrice = parseFloat(m.last_price_dollars) || null;
+    const volume = parseFloat(m.volume_fp) || 0;
+    const volume24h = parseFloat(m.volume_24h_fp) || 0;
+    const openInterest = parseFloat(m.open_interest_fp) || 0;
+
+    const yesPrice = yesBid ?? lastPrice ?? 0.5;
     const noPrice = 1 - yesPrice;
 
     return {
@@ -239,22 +305,22 @@ export function normalizeMarket(kalshiMarket) {
         description: m.subtitle || m.rules_primary || '',
         category: m.category || m.series_ticker || '',
         endDate: m.close_time || m.expiration_time || null,
-        volume: m.volume != null ? m.volume : 0,
-        volume24hr: m.volume_24h != null ? m.volume_24h : 0,
-        liquidity: m.open_interest != null ? m.open_interest : 0,
+        volume,
+        volume24hr: volume24h,
+        liquidity: openInterest,
         outcomes: ['Yes', 'No'],
         outcomePrices: [yesPrice.toString(), noPrice.toString()],
-        tokens: [m.ticker],     // Kalshi uses ticker, not token IDs
+        tokens: [m.ticker],
         exchange: 'kalshi',
-        // Kalshi-specific fields
+        // Kalshi-specific fields (converted to cents for backward compat)
         ticker: m.ticker,
         event_ticker: m.event_ticker,
-        yes_bid: m.yes_bid,
-        yes_ask: m.yes_ask,
-        no_bid: m.no_bid,
-        no_ask: m.no_ask,
-        last_price: m.last_price,
-        open_interest: m.open_interest,
+        yes_bid: yesBid != null ? Math.round(yesBid * 100) : null,
+        yes_ask: yesAsk != null ? Math.round(yesAsk * 100) : null,
+        no_bid: noBid != null ? Math.round(noBid * 100) : null,
+        no_ask: noAsk != null ? Math.round(noAsk * 100) : null,
+        last_price: lastPrice != null ? Math.round(lastPrice * 100) : null,
+        open_interest: openInterest,
         status: m.status,
     };
 }

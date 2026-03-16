@@ -76,10 +76,16 @@
         document.getElementById('analyzeBtn')?.addEventListener('click', analyzeMarket);
         document.getElementById('loadMoreBtn')?.addEventListener('click', loadMoreMarkets);
         document.getElementById('deriveKeysBtn')?.addEventListener('click', deriveApiKeys);
+        document.getElementById('autopilotBtn')?.addEventListener('click', startAutopilot);
+        document.getElementById('stopAutopilotBtn')?.addEventListener('click', stopAutopilot);
         document.getElementById('runBotBtn')?.addEventListener('click', () => runBot(false));
+        document.getElementById('safeCompBtn')?.addEventListener('click', runSafeCompounder);
+        document.getElementById('marketMakerBtn')?.addEventListener('click', runMarketMaker);
         document.getElementById('dryRunBtn')?.addEventListener('click', () => runBot(true));
         document.getElementById('startMonitorBtn')?.addEventListener('click', startMonitor);
         document.getElementById('stopMonitorBtn')?.addEventListener('click', stopMonitor);
+        document.getElementById('syncPositionsBtn')?.addEventListener('click', syncFromKalshi);
+        document.getElementById('assessTradesBtn')?.addEventListener('click', assessTrades);
 
         const searchInput = document.getElementById('marketSearch');
         if (searchInput) {
@@ -162,6 +168,10 @@
             exchange: document.getElementById('exchange')?.value || DEFAULTS.exchange,
             anthropicKey: document.getElementById('anthropicKey')?.value || '',
             braveApiKey: document.getElementById('braveApiKey')?.value || '',
+            oddsApiKey: document.getElementById('oddsApiKey')?.value || '',
+            sportsApiKey: document.getElementById('sportsApiKey')?.value || '',
+            fredApiKey: document.getElementById('fredApiKey')?.value || '',
+            openrouterKey: document.getElementById('openrouterKey')?.value || '',
             // Kalshi
             kalshiKeyId: document.getElementById('kalshiKeyId')?.value || '',
             kalshiPrivateKey: document.getElementById('kalshiPrivateKey')?.value || '',
@@ -342,13 +352,26 @@
             for (const pos of state.positions) {
                 if (!pos.tokenId) continue;
                 try {
-                    const resp = await fetch(`https://clob.polymarket.com/midpoint?token_id=${pos.tokenId}`);
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        const newPrice = parseFloat(data.mid);
-                        if (newPrice && newPrice !== pos.currentPrice) {
-                            pos.currentPrice = newPrice;
-                            updated = true;
+                    if (pos.exchange === 'kalshi') {
+                        // Fetch Kalshi price via our server (order book)
+                        const resp = await fetch(`/api/kalshi-price?ticker=${encodeURIComponent(pos.ticker || pos.tokenId)}&side=${pos.outcome || 'Yes'}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            if (data.mid != null && data.mid !== pos.currentPrice) {
+                                pos.currentPrice = data.mid;
+                                updated = true;
+                            }
+                        }
+                    } else {
+                        // Polymarket CLOB
+                        const resp = await fetch(`https://clob.polymarket.com/midpoint?token_id=${pos.tokenId}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            const newPrice = parseFloat(data.mid);
+                            if (newPrice && newPrice !== pos.currentPrice) {
+                                pos.currentPrice = newPrice;
+                                updated = true;
+                            }
                         }
                     }
                 } catch { /* ignore */ }
@@ -704,6 +727,10 @@
             const headers = { 'Content-Type': 'application/json' };
             if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
             if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
+            if (state.settings.oddsApiKey) headers['X-Odds-Key'] = state.settings.oddsApiKey;
+            if (state.settings.sportsApiKey) headers['X-Sports-Key'] = state.settings.sportsApiKey;
+            if (state.settings.fredApiKey) headers['X-Fred-Key'] = state.settings.fredApiKey;
+            if (state.settings.openrouterKey) headers['X-OpenRouter-Key'] = state.settings.openrouterKey;
 
             const resp = await fetch('/api/analyze', {
                 method: 'POST',
@@ -984,19 +1011,6 @@
     }
 
     function renderPortfolioSummary() {
-        let totalInvested = 0;
-        let currentValue = 0;
-
-        state.positions.forEach(pos => {
-            totalInvested += pos.cost;
-            currentValue += pos.shares * (pos.currentPrice || pos.avgPrice);
-        });
-
-        const pnl = currentValue - totalInvested;
-        const resolved = state.trades.filter(t => t.resolved);
-        const wins = resolved.filter(t => t.profit > 0).length;
-        const winRate = resolved.length > 0 ? ((wins / resolved.length) * 100).toFixed(0) + '%' : '—';
-
         const setVal = (id, val, cls) => {
             const el = document.getElementById(id);
             if (el) {
@@ -1005,10 +1019,34 @@
             }
         };
 
+        // Use Kalshi account data as source of truth
+        const acct = state.kalshiAccount || JSON.parse(localStorage.getItem('pb_kalshi_account') || 'null');
+        if (acct) {
+            setVal('kalshiCash', '$' + (acct.cash || 0).toFixed(2));
+            setVal('kalshiTotal', '$' + (acct.total || 0).toFixed(2));
+            const pnl = acct.realizedPnl || 0;
+            setVal('kalshiPnl', (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2), pnl >= 0 ? 'positive' : 'negative');
+            const kalshiEl = document.getElementById('kalshiAccountRow');
+            if (kalshiEl) kalshiEl.style.display = '';
+
+            // Positions value from Kalshi
+            const posValue = (acct.total || 0) - (acct.cash || 0);
+            setVal('currentValue', '$' + posValue.toFixed(2));
+        }
+
+        // Cost from synced positions
+        let totalInvested = 0;
+        state.positions.forEach(pos => { totalInvested += pos.cost || 0; });
         setVal('totalInvested', '$' + totalInvested.toFixed(2));
-        setVal('currentValue', '$' + currentValue.toFixed(2));
+
+        // P&L from Kalshi
+        const currentValue = acct ? (acct.total || 0) - (acct.cash || 0) : 0;
+        const pnl = currentValue - totalInvested;
         setVal('totalPnl', (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2), pnl >= 0 ? 'positive' : 'negative');
-        setVal('winRate', winRate);
+
+        const resolved = state.trades.filter(t => t.resolved);
+        const wins = resolved.filter(t => t.profit > 0).length;
+        setVal('winRate', resolved.length > 0 ? ((wins / resolved.length) * 100).toFixed(0) + '%' : '—');
     }
 
     function renderPositions() {
@@ -1051,15 +1089,48 @@
         container.innerHTML = html;
     }
 
-    window._closePosition = function (index) {
+    window._closePosition = async function (index) {
         const pos = state.positions[index];
         if (!pos) return;
-        if (!confirm(`Close position: ${pos.shares.toFixed(2)} ${pos.outcome} shares of "${truncate(pos.market, 50)}"?`)) return;
+        if (!confirm(`SELL ${pos.shares} ${pos.outcome} shares of "${truncate(pos.market, 50)}" on Kalshi?`)) return;
+
+        if (pos.exchange === 'kalshi' && pos.shares > 0) {
+            try {
+                showToast('Placing sell order on Kalshi...', 'info');
+                const headers = { 'Content-Type': 'application/json' };
+                if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+                if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+
+                const price = Math.round((pos.currentPrice || pos.avgPrice || 0.5) * 100);
+                const resp = await fetch('/api/kalshi-trade', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        ticker: pos.ticker || pos.marketId,
+                        side: pos.outcome.toLowerCase(),
+                        action: 'sell',
+                        count: Math.floor(pos.shares),
+                    }),
+                });
+
+                const data = await resp.json();
+                if (!resp.ok) {
+                    showToast(`Sell failed: ${data.error || 'unknown'}`, 'error');
+                    return;
+                }
+
+                const tag = data.trade?.live ? 'LIVE' : 'PAPER';
+                showToast(`[${tag}] Sold ${pos.shares} ${pos.outcome} @ ${price}¢`, 'success');
+                addBotLog('trade', `[${tag}] SOLD ${pos.shares} ${pos.outcome} "${truncate(pos.market, 40)}" @ ${price}¢`);
+            } catch (err) {
+                showToast(`Sell error: ${err.message}`, 'error');
+                return;
+            }
+        }
 
         state.positions.splice(index, 1);
         localStorage.setItem('pb_positions', JSON.stringify(state.positions));
         renderPortfolio();
-        showToast('Position closed', 'info');
     };
 
     function renderTradeHistory() {
@@ -1149,6 +1220,10 @@
             const headers = { 'Content-Type': 'application/json' };
             if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
             if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
+            if (state.settings.oddsApiKey) headers['X-Odds-Key'] = state.settings.oddsApiKey;
+            if (state.settings.sportsApiKey) headers['X-Sports-Key'] = state.settings.sportsApiKey;
+            if (state.settings.fredApiKey) headers['X-Fred-Key'] = state.settings.fredApiKey;
+            if (state.settings.openrouterKey) headers['X-OpenRouter-Key'] = state.settings.openrouterKey;
 
             if (isKalshi) {
                 if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
@@ -1183,11 +1258,16 @@
 
             for (const analysis of (report.analyses || [])) {
                 const rec = analysis.recommendation;
+                const odds = analysis.oddsData ? ` | Bookmakers: ${analysis.oddsData}` : '';
+                const news = analysis.newsProvider ? ` | News: ${analysis.newsProvider}` : '';
                 if (rec.action === 'HOLD') {
                     addBotLog('skip', `HOLD: ${truncate(analysis.market, 60)} — ${rec.reasoning || 'no edge'}`);
                 } else {
-                    const liveInfo = analysis.liveData ? ` [${analysis.liveData}]` : '';
-                    addBotLog('info', `${rec.action}: ${truncate(analysis.market, 50)} (${rec.confidence}, ${rec.edgePercent || '?'}pt edge)${liveInfo}`);
+                    addBotLog('trade', `📊 ${rec.action}: ${truncate(analysis.market, 50)}`);
+                    addBotLog('info', `   Confidence: ${rec.confidence} | Edge: ${rec.edge || '?'}pts | Kelly: ${rec.kellyFraction || '?'}${odds}${news}`);
+                    if (rec.bullCase) addBotLog('info', `   🐂 Bull: ${rec.bullCase}`);
+                    if (rec.bearCase) addBotLog('info', `   🐻 Bear: ${rec.bearCase}`);
+                    addBotLog('info', `   → Decision: ${rec.reasoning || 'no reasoning'}`);
                 }
             }
 
@@ -1197,7 +1277,9 @@
 
                 state.trades.unshift(trade);
 
-                if (!dryRun) {
+                // Don't add Kalshi positions locally — sync from Kalshi is the source of truth
+                // Only add for non-Kalshi (Polymarket) or dry runs
+                if (!dryRun && trade.exchange !== 'kalshi') {
                     const existing = state.positions.find(p => p.marketId === trade.marketId && p.outcome === trade.outcome);
                     if (existing) {
                         existing.shares += trade.shares;
@@ -1209,9 +1291,16 @@
                             shares: trade.shares, cost: trade.amount, avgPrice: trade.price,
                             currentPrice: trade.price, tokenId: trade.tokenId, timestamp: trade.timestamp,
                             endDate: trade.endDate || null,
+                            exchange: trade.exchange || (state.settings.exchange || DEFAULTS.exchange),
+                            ticker: trade.ticker || trade.marketId,
                         });
                     }
                 }
+            }
+
+            // Auto-sync from Kalshi after trades to get accurate positions
+            if (!dryRun && isKalshi) {
+                await syncFromKalshi().catch(() => {});
             }
 
             for (const err of (report.errors || [])) {
@@ -1256,6 +1345,278 @@
         logEl.scrollTop = logEl.scrollHeight;
     }
 
+    // ── Sync Positions from Kalshi ──────────────────────────
+
+    // ── Autopilot: runs everything in a loop ──────────────
+
+    let autopilotId = null;
+    let autopilotRunning = false;
+
+    async function startAutopilot() {
+        if (autopilotRunning) return;
+        autopilotRunning = true;
+        document.getElementById('autopilotBtn').style.display = 'none';
+        document.getElementById('stopAutopilotBtn').style.display = '';
+
+        const logEl = document.getElementById('botLog');
+        if (logEl) logEl.style.display = 'block';
+
+        addBotLog('info', 'Autopilot started — syncing, trading, and monitoring automatically');
+
+        // Run first cycle immediately
+        await runAutopilotCycle();
+
+        // Then repeat every 10 minutes
+        autopilotId = setInterval(runAutopilotCycle, 10 * 60 * 1000);
+    }
+
+    function stopAutopilot() {
+        autopilotRunning = false;
+        if (autopilotId) { clearInterval(autopilotId); autopilotId = null; }
+        // Also stop the monitor
+        stopMonitor();
+        document.getElementById('autopilotBtn').style.display = '';
+        document.getElementById('stopAutopilotBtn').style.display = 'none';
+        addBotLog('info', 'Autopilot stopped');
+        showToast('Autopilot stopped', 'info');
+    }
+
+    async function runAutopilotCycle() {
+        if (!autopilotRunning) return;
+
+        try {
+            // Step 1: Sync positions from Kalshi
+            addBotLog('info', '── Autopilot cycle starting ──');
+            await syncFromKalshi().catch(() => {});
+
+            // Step 2: Run Safe Compounder (low-risk NO trades)
+            if (!autopilotRunning) return;
+            addBotLog('info', 'Running Safe Compounder...');
+            await runSafeCompounder().catch(e => addBotLog('error', `Safe Compounder: ${e.message}`));
+
+            // Step 3: Run Market Maker (spread capture)
+            if (!autopilotRunning) return;
+            addBotLog('info', 'Running Market Maker...');
+            await runMarketMaker().catch(e => addBotLog('error', `Market Maker: ${e.message}`));
+
+            // Step 4: Run Trading Bot (Bull vs Bear analysis)
+            if (!autopilotRunning) return;
+            addBotLog('info', 'Running Trading Bot...');
+            await runBot(false).catch(e => addBotLog('error', `Trading Bot: ${e.message}`));
+
+            // Step 5: Sync again to get updated positions
+            await syncFromKalshi().catch(() => {});
+
+            // Step 6: Run monitor check
+            if (!autopilotRunning) return;
+            await runMonitorCheck().catch(() => {});
+
+            addBotLog('info', '── Autopilot cycle complete — next in 10min ──');
+        } catch (err) {
+            addBotLog('error', `Autopilot cycle error: ${err.message}`);
+        }
+    }
+
+    async function runSafeCompounder() {
+        if (state.botRunning) return;
+        state.botRunning = true;
+        const btn = document.getElementById('safeCompBtn');
+        if (btn) btn.disabled = true;
+
+        const logEl = document.getElementById('botLog');
+        if (logEl) logEl.style.display = 'block';
+        addBotLog('info', 'Safe Compounder starting — scanning for high-probability NO opportunities...');
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
+            if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+            if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+
+            const total = state.settings.budget || DEFAULTS.budget;
+            const resp = await fetch('/api/kalshi-safe-compounder', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    budget: total,
+                    maxPerTrade: state.settings.maxPositionSize || DEFAULTS.maxPositionSize,
+                    dryRun: false,
+                    marketLimit: 20,
+                }),
+            });
+
+            const report = await resp.json();
+            addBotLog('info', `Scanned ${report.marketsScanned} markets, found ${report.candidates || 0} candidates`);
+
+            for (const a of (report.analyses || [])) {
+                if (a.edge > 0) {
+                    addBotLog('info', `Candidate: ${truncate(a.market, 50)} — YES at ${a.yesPrice}¢, NO prob ${(a.estimatedNoProb * 100).toFixed(0)}%, edge ${(a.edge * 100).toFixed(1)}¢`);
+                    addBotLog('info', `   ${a.reasoning}`);
+                }
+            }
+
+            for (const trade of (report.trades || [])) {
+                addBotLog('trade', `[SAFE] NO ${truncate(trade.market, 45)} — ${trade.count} contracts @ ${trade.price}¢`);
+                addBotLog('info', `   ${trade.reasoning}`);
+            }
+
+            addBotLog('info', `Done — ${report.tradesExecuted || 0} safe compounder trades`);
+
+            // Auto-sync from Kalshi
+            await syncFromKalshi().catch(() => {});
+        } catch (err) {
+            addBotLog('error', `Safe Compounder failed: ${err.message}`);
+        } finally {
+            state.botRunning = false;
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function runMarketMaker() {
+        if (state.botRunning) return;
+        state.botRunning = true;
+        const btn = document.getElementById('marketMakerBtn');
+        if (btn) btn.disabled = true;
+
+        const logEl = document.getElementById('botLog');
+        if (logEl) logEl.style.display = 'block';
+        addBotLog('info', 'Market Maker starting — scanning for spread opportunities...');
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+            if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+
+            const total = state.settings.budget || DEFAULTS.tradingBudget;
+            const resp = await fetch('/api/kalshi-market-maker', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    budget: total,
+                    maxPerMarket: 3,
+                    maxMarkets: 5,
+                    dryRun: false,
+                }),
+            });
+
+            const report = await resp.json();
+            addBotLog('info', `Market Maker: Quoting ${report.marketsQuoted} markets, ${report.ordersPlaced} orders placed, exposure $${(report.totalExposure || 0).toFixed(2)}`);
+
+            for (const q of (report.quotes || [])) {
+                addBotLog('trade', `MM: ${truncate(q.market, 50)} — Buy @${q.buyPrice}\u00a2 / Sell @${q.sellPrice}\u00a2 (spread ${q.spread}\u00a2, ${q.buyContracts}+${q.sellContracts} contracts)`);
+            }
+
+            for (const e of (report.errors || [])) {
+                addBotLog('error', `MM error: ${e.ticker || e.market} — ${e.error}`);
+            }
+
+            addBotLog('info', `Done — ${report.marketsQuoted || 0} markets quoted, ${report.ordersPlaced || 0} orders`);
+
+            // Auto-sync from Kalshi
+            await syncFromKalshi().catch(() => {});
+        } catch (err) {
+            addBotLog('error', `Market Maker failed: ${err.message}`);
+        } finally {
+            state.botRunning = false;
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function assessTrades() {
+        const btn = document.getElementById('assessTradesBtn');
+        if (btn) btn.disabled = true;
+        addBotLog('info', 'Assessing all positions — Claude is reviewing each trade...');
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.anthropicKey) headers['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.braveApiKey) headers['X-Brave-Key'] = state.settings.braveApiKey;
+            if (state.settings.oddsApiKey) headers['X-Odds-Key'] = state.settings.oddsApiKey;
+            if (state.settings.sportsApiKey) headers['X-Sports-Key'] = state.settings.sportsApiKey;
+            if (state.settings.fredApiKey) headers['X-Fred-Key'] = state.settings.fredApiKey;
+            if (state.settings.openrouterKey) headers['X-OpenRouter-Key'] = state.settings.openrouterKey;
+
+            const resp = await fetch('/api/kalshi-assess', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ positions: state.positions }),
+            });
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+
+            // Show summary
+            const s = data.summary;
+            addBotLog('info', `Portfolio Grade: ${s.avgGrade} | ${s.totalPositions} positions | ${s.sellRecommendations} sell recommendations | ${s.noEdgePositions} with no edge`);
+
+            // Show each assessment
+            for (const a of (data.assessments || [])) {
+                const gradeColor = { A: '🟢', B: '🟢', C: '🟡', D: '🔴', F: '🔴' }[a.grade] || '⚪';
+                const pnl = a.pnlPct > 0 ? `+${a.pnlPct}%` : `${a.pnlPct}%`;
+                addBotLog('info', `${gradeColor} [${a.grade}] ${truncate(a.market, 45)} (${a.outcome} ${pnl})`);
+                addBotLog('info', `   Why bought: ${a.whyBought || '?'}`);
+                addBotLog('info', `   Assessment: ${a.assessment || '?'}`);
+                addBotLog(a.recommendation === 'SELL' ? 'error' : 'info', `   → ${a.recommendation}: ${a.reasoning || '?'}`);
+            }
+        } catch (err) {
+            addBotLog('error', `Assessment failed: ${err.message}`);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function syncFromKalshi() {
+        const btn = document.getElementById('syncPositionsBtn');
+        if (btn) btn.disabled = true;
+        addBotLog('info', 'Syncing positions from Kalshi...');
+
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.settings.kalshiKeyId) headers['X-Kalshi-Key-Id'] = state.settings.kalshiKeyId;
+            if (state.settings.kalshiPrivateKey) headers['X-Kalshi-Private-Key'] = btoa(state.settings.kalshiPrivateKey);
+
+            const resp = await fetch('/api/kalshi-sync', { method: 'POST', headers });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.error || `HTTP ${resp.status}`);
+            }
+
+            const data = await resp.json();
+            const synced = data.positions || [];
+
+            // Replace all Kalshi positions with what Kalshi actually reports
+            // Keep any non-Kalshi (Polymarket) positions intact
+            const nonKalshi = state.positions.filter(p => p.exchange !== 'kalshi');
+            state.positions = [...synced, ...nonKalshi];
+
+            localStorage.setItem('pb_positions', JSON.stringify(state.positions));
+            const added = synced.length;
+
+            // Store Kalshi account data for display
+            if (data.balance != null) {
+                state.kalshiAccount = {
+                    cash: data.balance,
+                    positions: data.portfolioValue,
+                    total: (data.balance || 0) + (data.portfolioValue || 0),
+                    restingOrders: data.openOrders || 0,
+                    realizedPnl: data.realizedPnl || 0,
+                };
+                localStorage.setItem('pb_kalshi_account', JSON.stringify(state.kalshiAccount));
+                addBotLog('info', `Kalshi: $${data.balance.toFixed(2)} cash + $${(data.portfolioValue || 0).toFixed(2)} positions = $${state.kalshiAccount.total.toFixed(2)} total. ${data.openOrders || 0} resting orders.`);
+            }
+            addBotLog('info', `Synced ${synced.length} positions.`);
+            showToast(`Synced ${synced.length} positions from Kalshi`, 'success');
+
+            renderPortfolio();
+        } catch (err) {
+            addBotLog('error', `Sync failed: ${err.message}`);
+            showToast(`Sync failed: ${err.message}`, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
     // ── Position Monitor ────────────────────────────────────
     // Continuously checks positions for stop-loss, take-profit, price spikes
 
@@ -1274,8 +1635,13 @@
 
         addBotLog('info', `Monitor started — checking every ${intervalMin}min (SL: ${state.settings.stopLossPct || DEFAULTS.stopLossPct}%, TP: ${state.settings.takeProfitPct || DEFAULTS.takeProfitPct}%, Trail: ${state.settings.trailingStopPct || DEFAULTS.trailingStopPct}%)`);
 
-        runMonitorCheck(); // immediate first check
-        state.monitorId = setInterval(runMonitorCheck, intervalMin * 60 * 1000);
+        // Auto-sync from Kalshi before each monitor check
+        const monitorCycle = async () => {
+            await syncFromKalshi().catch(() => {});
+            await runMonitorCheck();
+        };
+        monitorCycle(); // immediate first check
+        state.monitorId = setInterval(monitorCycle, intervalMin * 60 * 1000);
 
         // Also start auto re-scan if configured
         const rescanMin = state.settings.autoRescan ?? DEFAULTS.autoRescan;
@@ -1309,9 +1675,16 @@
         if (logEl) logEl.style.display = 'block';
 
         try {
+            const monitorHeaders = { 'Content-Type': 'application/json' };
+            if (state.settings.anthropicKey) monitorHeaders['X-Anthropic-Key'] = state.settings.anthropicKey;
+            if (state.settings.braveApiKey) monitorHeaders['X-Brave-Key'] = state.settings.braveApiKey;
+            if (state.settings.oddsApiKey) monitorHeaders['X-Odds-Key'] = state.settings.oddsApiKey;
+            if (state.settings.openrouterKey) monitorHeaders['X-OpenRouter-Key'] = state.settings.openrouterKey;
+            if (state.settings.sportsApiKey) monitorHeaders['X-Sports-Key'] = state.settings.sportsApiKey;
+
             const resp = await fetch('/api/monitor', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: monitorHeaders,
                 body: JSON.stringify({
                     positions: state.positions,
                     stopLossPct: state.settings.stopLossPct || DEFAULTS.stopLossPct,
@@ -1321,9 +1694,13 @@
                 }),
             });
 
-            if (!resp.ok) return;
+            if (!resp.ok) {
+                addBotLog('error', `Monitor check failed: HTTP ${resp.status}`);
+                return;
+            }
 
             const data = await resp.json();
+            addBotLog('info', `Monitor: ${data.positionsChecked || 0} checked, ${data.alerts?.length || 0} alerts, ${data.actions?.length || 0} actions`);
 
             // Update position prices from monitor
             if (data.updatedPositions?.length > 0) {
@@ -1393,7 +1770,7 @@
 
             const endpoint = isKalshi ? '/api/kalshi-trade' : '/api/trade';
             const body = isKalshi
-                ? { ticker: action.ticker || action.tokenId, side: action.outcome?.toLowerCase() || 'yes', action: 'sell', count: action.shares || 1, price: Math.round((action.currentPrice || 0.5) * 100) }
+                ? { ticker: action.ticker || action.tokenId, side: action.outcome?.toLowerCase() || 'yes', action: 'sell', count: action.shares || 1 }
                 : { tokenId: action.tokenId, side: 'SELL', shares: action.shares, price: action.currentPrice };
 
             const resp = await fetch(endpoint, {

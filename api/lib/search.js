@@ -79,10 +79,12 @@ export async function searchNews(query, keys = {}) {
 }
 
 async function searchBrave(query, apiKey) {
+    // Add "prediction odds preview" to find betting-relevant content
+    const enrichedQuery = query + ' prediction odds preview';
     const params = new URLSearchParams({
-        q: query,
+        q: enrichedQuery,
         count: MAX_RESULTS.toString(),
-        freshness: 'pd', // past day
+        freshness: 'pw', // past week — previews come days before events
         text_decorations: 'false',
     });
 
@@ -93,12 +95,23 @@ async function searchBrave(query, apiKey) {
     if (!resp.ok) throw new Error(`Brave API ${resp.status}`);
     const data = await resp.json();
 
-    return (data.web?.results || []).slice(0, MAX_RESULTS).map(r => ({
+    const webResults = (data.web?.results || []).slice(0, MAX_RESULTS).map(r => ({
         title: r.title || '',
         snippet: r.description || '',
         source: r.url ? new URL(r.url).hostname : '',
+        age: r.page_age || r.age || '',
+    }));
+
+    // Also pull from news results if available
+    const newsResults = (data.news?.results || []).slice(0, 3).map(r => ({
+        title: r.title || '',
+        snippet: r.description || '',
+        source: r.meta_url?.hostname || '',
         age: r.age || '',
     }));
+
+    // Combine news first (more timely), then web
+    return [...newsResults, ...webResults].slice(0, MAX_RESULTS);
 }
 
 async function searchGoogle(query, apiKey, cx) {
