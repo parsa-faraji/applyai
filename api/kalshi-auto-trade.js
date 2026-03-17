@@ -9,6 +9,7 @@ import { getWeatherContext } from './lib/noaa.js';
 import { runEnsemble, formatEnsembleForPrompt } from './lib/ensemble.js';
 import { getSportsContext } from './lib/sports.js';
 import { logTrade, logDecision, categorizeMarket } from './lib/trade-logger.js';
+import { calibrateWithContext } from './lib/calibration.js';
 
 export const config = { maxDuration: 60 };
 
@@ -464,59 +465,62 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     const research = await runResearchStage(market, apiKey, liveContext);
     const rawProb = research.result.probability;
 
-    // ── CALIBRATION: Multi-source probability fusion ──
-    // KalshiBench: Claude ECE = 0.12 (overconfident by ~12pts on average)
-    // At 90%+ confidence, Claude's actual accuracy is only 70%.
-    //
-    // Strategy: When bookmaker odds exist, use them as the BASE probability
-    // and allow Claude only a small adjustment. When no odds, apply aggressive
-    // Platt-style shrinkage toward 50%.
+    // ── CALIBRATION: Platt scaling with context-aware k ──
+    // Uses sigmoid(k * logit(raw) + b) where k < 1 compresses toward 50%.
+    // When bookmaker odds exist, use them as the BASE probability and allow
+    // Claude only a small Platt-scaled adjustment on top.
 
     let researchProb;
 
     if (liveContext.odds?.consensus) {
         // BEST CASE: Use bookmaker odds as base probability (they spend millions on this)
-        // Pick the side that aligns with Claude's estimate (above or below 50%)
         const consensusEntries = Object.entries(liveContext.odds.consensus);
-
-        // Vig is already removed per-bookmaker in odds.js, but normalize the consensus
-        // to sum to 1.0 in case of rounding
         const totalConsensus = consensusEntries.reduce((sum, [, d]) => sum + d.avgProb, 0);
 
-        // Find the most relevant side: the one Claude thinks is most likely, or the
-        // first entry (home team / primary outcome) if Claude is near 50%
         let oddsBaseProb;
         if (consensusEntries.length === 2) {
-            // Binary market: pick the side closest to Claude's raw estimate
             const [side1, side2] = consensusEntries;
             const p1 = totalConsensus > 0 ? side1[1].avgProb / totalConsensus : side1[1].avgProb;
             const p2 = totalConsensus > 0 ? side2[1].avgProb / totalConsensus : side2[1].avgProb;
-            // Use the probability of the YES-equivalent side (the one with higher implied prob
-            // if Claude thinks YES is likely, or lower if Claude thinks NO is likely)
             oddsBaseProb = rawProb >= 0.5 ? Math.max(p1, p2) : Math.min(p1, p2);
         } else {
-            // Non-binary or single side: use the highest-probability outcome
             const sorted = consensusEntries.sort((a, b) => b[1].avgProb - a[1].avgProb);
             oddsBaseProb = totalConsensus > 0 ? sorted[0][1].avgProb / totalConsensus : sorted[0][1].avgProb;
         }
 
-        // Allow Claude ±5pts adjustment max on top of bookmaker odds
-        const claudeAdjustment = Math.max(-0.05, Math.min(0.05, rawProb - oddsBaseProb));
+        // Platt-scale Claude's estimate, then allow ±5pt adjustment on odds base
+        const calibratedRaw = calibrateWithContext(rawProb, {
+            hasOdds: true,
+            hasEnsemble: !!liveContext.ensemble?.shouldTrade,
+            hasNews: !!(liveContext.news?.headlines?.length),
+            category: null,
+        });
+        const claudeAdjustment = Math.max(-0.05, Math.min(0.05, calibratedRaw - oddsBaseProb));
         researchProb = oddsBaseProb + claudeAdjustment;
     } else if (liveContext.ensemble?.shouldTrade && liveContext.ensemble.disagreement < 0.15) {
-        // GOOD CASE: Multi-model consensus with strong agreement
-        // Weight ensemble 60%, Claude 40% (ensemble reduces single-model bias)
-        researchProb = liveContext.ensemble.consensusProbability * 0.6 + rawProb * 0.4;
-        // Still shrink toward 50% by 25% to account for collective LLM overconfidence
-        researchProb = 0.5 + (researchProb - 0.5) * 0.75;
+        // GOOD CASE: Platt-scale both Claude and ensemble, then blend
+        const calibratedRaw = calibrateWithContext(rawProb, {
+            hasOdds: false,
+            hasEnsemble: true,
+            hasNews: !!(liveContext.news?.headlines?.length),
+            category: null,
+        });
+        // Weight ensemble 60%, Platt-calibrated Claude 40%
+        const ensembleCalibrated = calibrateWithContext(liveContext.ensemble.consensusProbability, {
+            hasOdds: false,
+            hasEnsemble: true,
+            hasNews: !!(liveContext.news?.headlines?.length),
+            category: null,
+        });
+        researchProb = ensembleCalibrated * 0.6 + calibratedRaw * 0.4;
     } else {
-        // WORST CASE: Claude alone — apply aggressive shrinkage
-        // Only trust 30% of Claude's deviation from 50% (was 40%)
-        let shrinkage = 0.30;
-        if (liveContext.news?.headlines?.length > 0) shrinkage += 0.05;
-        if (liveContext.sports) shrinkage += 0.05;
-        shrinkage = Math.min(shrinkage, 0.40); // never trust > 40% without odds/ensemble
-        researchProb = 0.5 + (rawProb - 0.5) * shrinkage;
+        // WORST CASE: Claude alone — Platt scaling handles the shrinkage
+        researchProb = calibrateWithContext(rawProb, {
+            hasOdds: false,
+            hasEnsemble: false,
+            hasNews: !!(liveContext.news?.headlines?.length),
+            category: null,
+        });
     }
 
     // Clamp to valid range

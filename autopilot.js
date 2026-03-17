@@ -68,7 +68,7 @@ const stats = {
 
 async function callEndpoint(name, path, body = {}) {
     // Estimate API cost per endpoint
-    const costMap = { 'Safe Compounder': 0.05, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50 };
+    const costMap = { 'Safe Compounder': 0.05, 'Weather Strategy': 0, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50 };
     stats.estimatedApiCost += costMap[name] || 0;
     try {
         const resp = await fetch(`${SERVER}${path}`, {
@@ -176,6 +176,18 @@ async function runCycle() {
         log(`  Safe: scanned ${safe.marketsScanned || '?'}, ${safe.candidates || 0} candidates, ${safe.tradesExecuted || 0} trades`);
         for (const t of (safe.trades || [])) {
             log(`    → NO ${t.market?.slice(0, 50)} — ${t.count} contracts @ ${t.price}¢`);
+        }
+    }
+
+    // 2b. Weather Strategy
+    log('  Running Weather Strategy...');
+    const weather = await callEndpoint('Weather Strategy', '/api/kalshi-weather', {
+        budget: 50, maxPerTrade: 10, dryRun: false, marketLimit: 10,
+    });
+    if (weather) {
+        log(`  Weather: ${weather.marketsScanned || 0} scanned, ${weather.tradesExecuted || 0} trades`);
+        for (const t of (weather.trades || [])) {
+            log(`    → ${t.side.toUpperCase()} ${t.market?.slice(0, 60)} — ${t.count} @ ${(t.price*100).toFixed(0)}¢`);
         }
     }
 
