@@ -78,25 +78,36 @@ export default async function handler(req, res) {
         if (series_ticker) params.series_ticker = series_ticker;
         const data = await getMarkets(params);
 
-        // Filter out multivariate events (parlays) that slip past mve_filter
+        // Research-backed market filters (KalshiBench + ryanfrigo bot data)
         const allMarkets = (data.markets || []).filter(m => {
             const t = m.title || '';
-            // Skip multivariate/parlay markets
+            const ticker = m.ticker || '';
+            const vol = parseFloat(m.volume_24h_fp) || 0;
+
+            // === HARD BLOCKS (proven money losers) ===
+            // Multivariate/parlay markets
             if (/^(yes|no)\s/i.test(t)) return false;
             if ((t.match(/,/g) || []).length >= 2 && /\d+\+/.test(t)) return false;
-            // Skip first-goalscorer (true lottery — random who scores first)
-            if (/first goal/i.test(t)) return false;
-            if (/first scorer/i.test(t)) return false;
-            // Skip "what will X say" markets (vague, coin flip, Claude admits no edge)
+            // First goalscorer (lottery)
+            if (/first goal/i.test(t) || /first scorer/i.test(t)) return false;
+            // "What will X say" (coin flip, Claude admits no edge)
             if (/what will .+ say/i.test(t)) return false;
-            // Skip triple doubles (too rare/random)
+            // Triple doubles (too rare)
             if (/triple double/i.test(t)) return false;
-            // Keep basketball/football point props (player scoring history = real edge)
-            // but skip obscure stat props
+            // Double doubles (too rare)
+            if (/double double/i.test(t)) return false;
+            // ATP Challenger / obscure tennis (no data, void risks, -ROI)
+            if (/KXATPCHALLENGER/i.test(ticker)) return false;
+            if (/challenger/i.test(t)) return false;
+            // Obscure hockey/esports goals
             if (/\d+\+ (goals|strikeouts|saves|home runs)/i.test(t)) return false;
-            // Skip contracts priced below 20¢ or above 80¢ (favourite-longshot bias)
+
+            // === QUALITY FILTERS ===
+            // Price: only 25-75¢ (sweet spot for edge vs fees)
             const price = parseFloat(m.last_price_dollars || '0.5');
-            if (price < 0.20 || price > 0.80) return false;
+            if (price < 0.25 || price > 0.75) return false;
+            // Volume: require minimum activity (skip dead markets)
+            if (vol < 10) return false;
             return true;
         });
 
@@ -401,7 +412,38 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
 
     // ── Stage 1: Independent research (no market price shown) ──
     const research = await runResearchStage(market, apiKey, liveContext);
-    const researchProb = research.result.probability;
+    const rawProb = research.result.probability;
+
+    // ── CALIBRATION: Shrink Claude's overconfident estimates toward 50% ──
+    // KalshiBench data shows Claude's ECE is 0.12 — off by ~12pts on average
+    // Shrinkage factor depends on information quality
+    let shrinkage = 0.40; // base: trust only 40% of claimed edge
+    if (liveContext.odds) shrinkage += 0.15;       // bookmaker odds = much more reliable
+    if (liveContext.ensemble?.shouldTrade) shrinkage += 0.10; // multi-model agreement
+    if (liveContext.news?.headlines?.length > 0) shrinkage += 0.05; // has news context
+    if (liveContext.sports) shrinkage += 0.05;      // has live sports data
+    shrinkage = Math.min(shrinkage, 0.75); // cap at 75% trust
+
+    const researchProb = 0.5 + (rawProb - 0.5) * shrinkage;
+    const calibratedEdge = Math.abs(researchProb * 100 - yesPrice);
+
+    // ── INFORMATION QUALITY GATE: Don't trade blind ──
+    // If no external data at all, skip (Claude alone is not enough)
+    const hasExternalData = !!(liveContext.odds || liveContext.news?.headlines?.length || liveContext.sports || liveContext.economic || liveContext.weather);
+    if (!hasExternalData) {
+        return {
+            recommendation: { action: 'HOLD', confidence: 'low', edge: 0, kellyFraction: 0, reasoning: 'No external data — Claude alone is not reliable enough to trade' },
+            rawResponse: 'Skipped: no external data available',
+        };
+    }
+
+    // If calibrated edge < 8 points, not worth the fees
+    if (calibratedEdge < 8) {
+        return {
+            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Calibrated edge only ${calibratedEdge.toFixed(1)}pts (raw: ${Math.abs(rawProb * 100 - yesPrice).toFixed(1)}pts) — too thin after fees` },
+            rawResponse: `Calibrated prob: ${(researchProb*100).toFixed(0)}% (raw: ${(rawProb*100).toFixed(0)}%, shrinkage: ${shrinkage.toFixed(2)})`,
+        };
+    }
 
     // ── Stage 2: Bull vs Bear debate (parallel) ──
     const { bull, bear, bullRaw, bearRaw } = await runBullBearStage(market, apiKey, researchProb, yesPrice);
