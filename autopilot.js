@@ -124,8 +124,15 @@ async function runCycle() {
                     log(`  Monitor: ${mon.positionsChecked || 0} checked, ${mon.alerts?.length || 0} alerts, ${mon.actions?.length || 0} actions`);
                     for (const a of (mon.alerts || [])) log(`    ${a.type}: ${a.message}`);
 
-                    // Execute exits even in circuit breaker mode
-                    const exitActions = (mon.actions || []).filter(a => a.type === 'exit');
+                    // Execute exits even in circuit breaker mode (deduplicate by ticker)
+                    const cbSeenTickers = new Set();
+                    const exitActions = (mon.actions || []).filter(a => {
+                        if (a.type !== 'exit') return false;
+                        const key = a.ticker || a.tokenId;
+                        if (cbSeenTickers.has(key)) return false;
+                        cbSeenTickers.add(key);
+                        return true;
+                    });
                     for (const exit of exitActions) {
                         const pos = positions.find(p => p.ticker === exit.ticker || p.tokenId === exit.tokenId);
                         if (!pos) continue;
@@ -228,10 +235,17 @@ async function runCycle() {
                 log(`    ${a.type}: ${a.message}`);
             }
 
-            // 7. Execute monitor's exit recommendations
-            const exitActions = (mon.actions || []).filter(a => a.type === 'exit');
+            // 7. Execute monitor's exit recommendations (deduplicate by ticker)
+            const allExits = (mon.actions || []).filter(a => a.type === 'exit');
+            const seenTickers = new Set();
+            const exitActions = allExits.filter(a => {
+                const key = a.ticker || a.tokenId;
+                if (seenTickers.has(key)) return false;
+                seenTickers.add(key);
+                return true;
+            });
             if (exitActions.length > 0) {
-                log(`  Executing ${exitActions.length} exit(s)...`);
+                log(`  Executing ${exitActions.length} exit(s)${allExits.length > exitActions.length ? ` (${allExits.length - exitActions.length} duplicates skipped)` : ''}...`);
                 for (const exit of exitActions) {
                     // Find position details to sell
                     const pos = positions.find(p => (p.ticker === exit.ticker) || (p.tokenId === exit.tokenId));
