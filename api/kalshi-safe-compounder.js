@@ -5,6 +5,7 @@
 
 import { getMarkets, getOrderBook, summarizeOrderBook, placeOrder, normalizeMarket } from './lib/kalshi.js';
 import { searchNews } from './lib/search.js';
+import { logTrade, logDecision, categorizeMarket } from './lib/trade-logger.js';
 
 export const config = { maxDuration: 60 };
 
@@ -107,7 +108,16 @@ export default async function handler(req, res) {
                     ? '\nRecent news: ' + newsContext.headlines.slice(0, 3).join('; ')
                     : '';
 
-                const claudePrompt = `This event is priced at ${yesPriceCents}¢ on Kalshi (YES side). What is the true probability this event happens? Consider: ${market.question}, ${market.description || 'No description available'}.${newsSnippet}\nReply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence"}`;
+                // NOTE: Do NOT show the market price to prevent anchoring bias.
+                // Claude should estimate probability independently.
+                const claudePrompt = `You are estimating the probability of an event. Give your INDEPENDENT estimate — do NOT consider any market price.
+
+Question: ${market.question}
+Description: ${market.description || 'No description available'}
+${newsSnippet}
+
+Be calibrated: 10% means it happens 1 in 10 times. Consider base rates carefully.
+Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence"}`;
 
                 const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
                     method: 'POST',
@@ -155,9 +165,11 @@ export default async function handler(req, res) {
                 const bestNoAskProb = bestNoAskCents / 100; // convert to probability
                 const edge = trueNoProb - bestNoAskProb;
 
+                const category = categorizeMarket(rawMarket.ticker, market.question);
                 const analysisRecord = {
                     market: market.question,
                     ticker: rawMarket.ticker,
+                    category,
                     yesPrice: yesPriceCents,
                     estimatedNoProb: parseFloat(trueNoProb.toFixed(3)),
                     bestNoAskCents,
@@ -171,6 +183,7 @@ export default async function handler(req, res) {
                 if (trueNoProb < 0.90) {
                     analysisRecord.skipReason = `NO prob ${(trueNoProb * 100).toFixed(0)}% < 90% threshold`;
                     report.analyses.push(analysisRecord);
+                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason }); } catch {}
                     continue;
                 }
 
@@ -178,6 +191,7 @@ export default async function handler(req, res) {
                 if (edge <= 0.05) {
                     analysisRecord.skipReason = `Edge ${(edge * 100).toFixed(1)}¢ <= 5¢ threshold`;
                     report.analyses.push(analysisRecord);
+                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason }); } catch {}
                     continue;
                 }
 
@@ -188,11 +202,13 @@ export default async function handler(req, res) {
                 const orderPriceCents = bestNoAskCents - 1;
                 if (orderPriceCents < 1 || orderPriceCents > 99) continue;
 
-                // 7. Half-Kelly sizing
-                // kelly = edge / (1 - trueNoProb) = edge / trueYesProb
-                const kelly = trueYesProb > 0 ? edge / trueYesProb : 0;
-                const halfKelly = kelly * 0.5;
-                const positionDollars = Math.min(halfKelly * budgetLeft, maxPerTrade);
+                // 7. Quarter-Kelly sizing (conservative for safety)
+                // Standard Kelly for binary outcomes: f* = (p*b - q) / b
+                // where p = trueNoProb (win probability), b = (1/noAskProb - 1) (net odds), q = 1-p
+                const b = bestNoAskProb > 0 && bestNoAskProb < 1 ? (1 / bestNoAskProb - 1) : 1;
+                const kelly = b > 0 ? (trueNoProb * b - trueYesProb) / b : 0;
+                const quarterKelly = Math.max(0, kelly) * 0.25;
+                const positionDollars = Math.min(quarterKelly * budgetLeft, maxPerTrade);
 
                 if (positionDollars < 0.50) continue; // minimum viable trade
 
@@ -215,6 +231,10 @@ export default async function handler(req, res) {
                     reasoning: analysis.reasoning || '',
                     edge,
                 });
+
+                // Log trade persistently
+                trade.category = category;
+                try { logTrade(trade); } catch {}
 
                 report.trades.push(trade);
                 report.tradesExecuted++;

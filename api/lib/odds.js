@@ -168,13 +168,36 @@ export function findMatchingOdds(question, allOdds) {
         }
     }
 
-    // Calculate consensus probability (average across bookmakers)
+    // Calculate consensus probability with vig removal
+    // Bookmaker implied probs sum to >100% due to vig (overround).
+    // We normalize per-bookmaker so each bookmaker's probs sum to 1.0 before averaging.
     if (result.bookmakers.length > 0) {
-        const groups = {};
+        // Group by bookmaker first for vig removal
+        const byBookmaker = {};
         for (const bm of result.bookmakers) {
+            const bmKey = `${bm.bookmaker}_${bm.type}`;
+            if (!byBookmaker[bmKey]) byBookmaker[bmKey] = [];
+            byBookmaker[bmKey].push(bm);
+        }
+
+        // Normalize each bookmaker's probs to sum to 1.0 (remove vig)
+        const vigRemovedEntries = [];
+        for (const [, bms] of Object.entries(byBookmaker)) {
+            const totalImplied = bms.reduce((sum, bm) => sum + bm.impliedProb, 0);
+            for (const bm of bms) {
+                vigRemovedEntries.push({
+                    ...bm,
+                    vigFreeProb: totalImplied > 0 ? bm.impliedProb / totalImplied : bm.impliedProb,
+                });
+            }
+        }
+
+        // Now group by team/side and average the vig-free probs
+        const groups = {};
+        for (const bm of vigRemovedEntries) {
             const key = bm.team || bm.side || 'unknown';
             if (!groups[key]) groups[key] = [];
-            groups[key].push(bm.impliedProb);
+            groups[key].push(bm.vigFreeProb);
         }
         result.consensus = {};
         for (const [key, probs] of Object.entries(groups)) {

@@ -342,7 +342,9 @@ async function smartExitAnalysis(pos, livePrice, pnlPct, entryPrice, triggerType
     if (econCtx) context += '\n## Economic Data\n' + econCtx;
     if (weatherCtx) context += '\n## Weather Data\n' + weatherCtx;
 
-    if (oddsKey) {
+    // Only fetch odds for sports positions (save API quota — 500 req/month free tier)
+    const isSportsMarket = /\b(nba|nfl|nhl|mlb|ncaa|ufc|mma|tennis|soccer|football|basketball|baseball|hockey)\b/i.test(pos.market || '');
+    if (oddsKey && isSportsMarket) {
         try {
             const allOdds = await getAllSportsOdds(oddsKey).catch(() => []);
             const odds = findMatchingOdds(pos.market, allOdds);

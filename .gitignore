@@ -23,3 +23,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 .env
+
+# Trade data (contains API activity, don't commit)
+data/

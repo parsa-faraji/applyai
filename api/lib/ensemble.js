@@ -133,8 +133,11 @@ ${context}
         return { consensusProbability: 0.5, disagreement: 1, confidence: 'none', models: [], shouldTrade: false };
     }
 
-    // Confidence-adjusted weighted average
-    const confMultiplier = { low: 0.5, medium: 1.0, high: 1.5 };
+    // Flat-weighted average (DO NOT amplify self-reported confidence —
+    // LLMs are systematically overconfident in their confidence labels.
+    // High-confidence claims get MORE weight under the old system, rewarding
+    // the most overconfident model. Flat weights are empirically better.)
+    const confMultiplier = { low: 0.7, medium: 1.0, high: 1.0 }; // only penalize low, don't boost high
     let totalWeight = 0;
     let weightedSum = 0;
 
