@@ -191,16 +191,13 @@ async function runCycle() {
         }
     }
 
-    // 4. Trading Bot (Bull vs Bear) — PAUSED until calibration validated
-    // The bot keeps claiming 30-45pt edge on player props which is wildly overconfident
-    // Only monitor should run until we verify predictions match outcomes
-    log('  Trading Bot: PAUSED (monitor-only mode until calibration validated)');
-    const bot = null;
-    /*const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
+    // 4. Trading Bot (Bull vs Bear) — RE-ENABLED with fixed calibration
+    log('  Running Trading Bot...');
+    const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
         budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
         maxTradesPerCycle: 2,
-    });*/
+    });
     if (bot) {
         stats.totalTrades += bot.tradesExecuted || 0;
         stats.totalBuys += bot.tradesExecuted || 0;
