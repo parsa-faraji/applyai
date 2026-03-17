@@ -108,6 +108,49 @@ async function runCycle() {
         log(`  Session: ${pnlStr} since start | Est. API cost: $${stats.estimatedApiCost.toFixed(2)} | Runtime: ${runtime}h | Cycles: ${stats.cyclesRun}${realizedPnl}`);
     }
 
+    // Circuit breaker: if session P&L drops below -15%, pause NEW trading but still manage positions
+    if (stats.startBalance && stats.currentBalance) {
+        const sessionPnlPct = ((stats.currentBalance - stats.startBalance) / stats.startBalance) * 100;
+        if (sessionPnlPct < -15) {
+            log(`  ⚠ CIRCUIT BREAKER: Session down ${sessionPnlPct.toFixed(1)}% — pausing new trades. Still monitoring + exiting losers.`);
+            // Skip to monitor — no new trades from safe compounder, market maker, or trading bot
+            // But still execute exit recommendations from monitor (critical for loss management)
+            const positions = sync?.positions || [];
+            if (positions.length > 0) {
+                const mon = await callEndpoint('Monitor', '/api/monitor', {
+                    positions, stopLossPct: 20, takeProfitPct: 30, trailingStopPct: 10, spikeThreshold: 10,
+                });
+                if (mon) {
+                    log(`  Monitor: ${mon.positionsChecked || 0} checked, ${mon.alerts?.length || 0} alerts, ${mon.actions?.length || 0} actions`);
+                    for (const a of (mon.alerts || [])) log(`    ${a.type}: ${a.message}`);
+
+                    // Execute exits even in circuit breaker mode
+                    const exitActions = (mon.actions || []).filter(a => a.type === 'exit');
+                    for (const exit of exitActions) {
+                        const pos = positions.find(p => p.ticker === exit.ticker || p.tokenId === exit.tokenId);
+                        if (!pos) continue;
+                        const shares = exit.shares || pos.position_fp || pos.shares || 0;
+                        if (shares <= 0) continue;
+                        const side = (pos.outcome || 'yes').toLowerCase();
+                        try {
+                            const sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
+                                ticker: exit.ticker || pos.ticker, side, action: 'sell', count: Math.abs(shares),
+                            });
+                            if (sellResult?.trade) {
+                                stats.totalSells++;
+                                log(`    ✓ EXIT: ${Math.abs(shares)} ${side.toUpperCase()} of ${exit.ticker} @ ${sellResult.trade.price}¢`);
+                            }
+                        } catch (err) {
+                            log(`    ✗ Exit failed for ${exit.ticker}: ${err.message}`);
+                        }
+                    }
+                }
+            }
+            log('═══ Cycle complete (circuit breaker active) ═══\n');
+            return;
+        }
+    }
+
     // 1b. Cancel stale resting orders (older than 15 min)
     if (sync?.openOrders > 0) {
         log('  Cleaning up stale resting orders...');
@@ -183,6 +226,41 @@ async function runCycle() {
             log(`  Monitor: ${mon.positionsChecked || 0} checked, ${mon.alerts?.length || 0} alerts, ${mon.actions?.length || 0} actions`);
             for (const a of (mon.alerts || [])) {
                 log(`    ${a.type}: ${a.message}`);
+            }
+
+            // 7. Execute monitor's exit recommendations
+            const exitActions = (mon.actions || []).filter(a => a.type === 'exit');
+            if (exitActions.length > 0) {
+                log(`  Executing ${exitActions.length} exit(s)...`);
+                for (const exit of exitActions) {
+                    // Find position details to sell
+                    const pos = positions.find(p => (p.ticker === exit.ticker) || (p.tokenId === exit.tokenId));
+                    if (!pos) {
+                        log(`    ⚠ Could not find position for ${exit.ticker || exit.tokenId}`);
+                        continue;
+                    }
+
+                    const shares = exit.shares || pos.position_fp || pos.shares || 0;
+                    if (shares <= 0) continue;
+
+                    const side = (pos.outcome || 'yes').toLowerCase();
+                    try {
+                        const sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
+                            ticker: exit.ticker || pos.ticker,
+                            side,
+                            action: 'sell',
+                            count: Math.abs(shares),
+                        });
+                        if (sellResult?.trade) {
+                            stats.totalSells++;
+                            log(`    ✓ Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
+                        } else {
+                            log(`    ✗ Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
+                        }
+                    } catch (err) {
+                        log(`    ✗ Sell error for ${exit.ticker}: ${err.message}`);
+                    }
+                }
             }
         }
     }

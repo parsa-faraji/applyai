@@ -8,6 +8,7 @@ import { getEconomicContext } from './lib/fred.js';
 import { getWeatherContext } from './lib/noaa.js';
 import { runEnsemble, formatEnsembleForPrompt } from './lib/ensemble.js';
 import { getSportsContext } from './lib/sports.js';
+import { logTrade, logDecision, categorizeMarket } from './lib/trade-logger.js';
 
 export const config = { maxDuration: 60 };
 
@@ -101,6 +102,12 @@ export default async function handler(req, res) {
             if (/challenger/i.test(t)) return false;
             // Obscure hockey/esports goals
             if (/\d+\+ (goals|strikeouts|saves|home runs)/i.test(t)) return false;
+            // Player prop markets (Claude has no edge — pure guessing)
+            if (/\d+\+ (points|assists|rebounds|passing yards|rushing yards|receptions|tackles|sacks|interceptions)/i.test(t)) return false;
+            // Individual player performance (no reliable data source)
+            if (/will .+ (score|record|have|get|throw|rush for|pass for)/i.test(t) && /\d+/.test(t)) return false;
+            // Social media / streaming / app store (no data source)
+            if (/twitter|tweet|followers|subscribers|downloads|app store|streaming/i.test(t)) return false;
 
             // === QUALITY FILTERS ===
             // Price: only 25-75¢ (sweet spot for edge vs fees)
@@ -134,6 +141,7 @@ export default async function handler(req, res) {
         const ownedTickers = new Set(existingPositions);
         const tradedEvents = new Set(); // prevent buying both sides of same event
 
+
         for (const rawMarket of markets) {
             if (budgetLeft < 1) break;
             if (tradesThisCycle >= maxTradesPerCycle) break;
@@ -160,6 +168,17 @@ export default async function handler(req, res) {
                 const ob = obData ? summarizeOrderBook(obData) : null;
                 const oddsData = allOdds.length > 0 ? findMatchingOdds(market.question, allOdds) : null;
 
+                // Check spread BEFORE running expensive analysis (saves API calls)
+                if (ob && ob.spreadPct > 5) {
+                    report.analyses.push({
+                        market: market.question,
+                        ticker: rawMarket.ticker,
+                        recommendation: { action: 'HOLD', reasoning: 'Spread too wide — skipping analysis' },
+                        skipped: `spread ${ob.spreadPct.toFixed(1)}% > 5%`,
+                    });
+                    continue;
+                }
+
                 // Run multi-LLM ensemble for independent probability estimate
                 let ensembleData = null;
                 if (openrouterKey) {
@@ -176,9 +195,11 @@ export default async function handler(req, res) {
                     ? Object.entries(oddsData.consensus).map(([team, d]) => `${team}: ${(d.avgProb * 100).toFixed(0)}%`).join(', ')
                     : null;
 
+                const category = categorizeMarket(rawMarket.ticker, market.question);
                 report.analyses.push({
                     market: market.question,
                     ticker: rawMarket.ticker,
+                    category,
                     recommendation: analysis.recommendation,
                     liveData: ob ? { spread: ob.spread, midpoint: ob.midpoint } : null,
                     oddsData: oddsInfo,
@@ -186,16 +207,34 @@ export default async function handler(req, res) {
                 });
 
                 const rec = analysis.recommendation;
+
+                // Log every decision for calibration analysis
+                try {
+                    logDecision({
+                        strategy: 'auto-trade',
+                        ticker: rawMarket.ticker,
+                        eventTicker,
+                        category,
+                        market: market.question,
+                        marketPrice: parseFloat(rawMarket.last_price_dollars) || null,
+                        calibratedProbability: rec.researchProbability ?? null,
+                        edge: rec.edge ?? null,
+                        action: rec.action,
+                        confidence: rec.confidence,
+                        hadOdds: !!oddsData?.consensus,
+                        hadNews: !!(newsContext?.headlines?.length),
+                        hadEnsemble: !!ensembleData?.shouldTrade,
+                        hadSports: !!sportsContext,
+                        hadEconomic: !!econContext,
+                        hadWeather: !!weatherContext,
+                        endDate: market.endDate || null,
+                        reasoning: rec.reasoning,
+                    });
+                } catch {} // don't let logging failures break trading
                 if (shouldExecute(rec, riskLevel)) {
                     const tradeAmount = calculateKellySize(rec, budgetLeft, maxPerTrade, budget, maxSingleMarketPct);
 
                     if (tradeAmount >= 1) {
-                        // Check spread
-                        if (ob && ob.spreadPct > 5) {
-                            report.analyses[report.analyses.length - 1].skipped = 'spread too wide';
-                            continue;
-                        }
-
                         const isYes = rec.action.includes('YES');
                         // Use best ask from order book + 1¢ to ensure fill (hit existing sellers)
                         let priceCents;
@@ -230,8 +269,14 @@ export default async function handler(req, res) {
                         trade.reasoning = rec.reasoning;
                         trade.confidence = rec.confidence;
                         trade.edge = rec.edge;
-                        trade.hadOdds = !!oddsData;
+                        trade.hadOdds = !!oddsData?.consensus;
                         trade.hadNews = !!(newsContext?.headlines?.length);
+                        trade.category = category;
+                        trade.strategy = 'auto-trade';
+
+                        // Persist to trade log
+                        try { logTrade(trade); } catch {}
+
                         report.trades.push(trade);
                         report.tradesExecuted++;
                         tradesThisCycle++;
@@ -419,17 +464,63 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     const research = await runResearchStage(market, apiKey, liveContext);
     const rawProb = research.result.probability;
 
-    // ── CALIBRATION: Shrink Claude's overconfident estimates toward 50% ──
-    // KalshiBench data shows Claude's ECE is 0.12 — off by ~12pts on average
-    // Shrinkage factor depends on information quality
-    let shrinkage = 0.40; // base: trust only 40% of claimed edge
-    if (liveContext.odds) shrinkage += 0.15;       // bookmaker odds = much more reliable
-    if (liveContext.ensemble?.shouldTrade) shrinkage += 0.10; // multi-model agreement
-    if (liveContext.news?.headlines?.length > 0) shrinkage += 0.05; // has news context
-    if (liveContext.sports) shrinkage += 0.05;      // has live sports data
-    shrinkage = Math.min(shrinkage, 0.75); // cap at 75% trust
+    // ── CALIBRATION: Multi-source probability fusion ──
+    // KalshiBench: Claude ECE = 0.12 (overconfident by ~12pts on average)
+    // At 90%+ confidence, Claude's actual accuracy is only 70%.
+    //
+    // Strategy: When bookmaker odds exist, use them as the BASE probability
+    // and allow Claude only a small adjustment. When no odds, apply aggressive
+    // Platt-style shrinkage toward 50%.
 
-    const researchProb = 0.5 + (rawProb - 0.5) * shrinkage;
+    let researchProb;
+
+    if (liveContext.odds?.consensus) {
+        // BEST CASE: Use bookmaker odds as base probability (they spend millions on this)
+        // Pick the side that aligns with Claude's estimate (above or below 50%)
+        const consensusEntries = Object.entries(liveContext.odds.consensus);
+
+        // Vig is already removed per-bookmaker in odds.js, but normalize the consensus
+        // to sum to 1.0 in case of rounding
+        const totalConsensus = consensusEntries.reduce((sum, [, d]) => sum + d.avgProb, 0);
+
+        // Find the most relevant side: the one Claude thinks is most likely, or the
+        // first entry (home team / primary outcome) if Claude is near 50%
+        let oddsBaseProb;
+        if (consensusEntries.length === 2) {
+            // Binary market: pick the side closest to Claude's raw estimate
+            const [side1, side2] = consensusEntries;
+            const p1 = totalConsensus > 0 ? side1[1].avgProb / totalConsensus : side1[1].avgProb;
+            const p2 = totalConsensus > 0 ? side2[1].avgProb / totalConsensus : side2[1].avgProb;
+            // Use the probability of the YES-equivalent side (the one with higher implied prob
+            // if Claude thinks YES is likely, or lower if Claude thinks NO is likely)
+            oddsBaseProb = rawProb >= 0.5 ? Math.max(p1, p2) : Math.min(p1, p2);
+        } else {
+            // Non-binary or single side: use the highest-probability outcome
+            const sorted = consensusEntries.sort((a, b) => b[1].avgProb - a[1].avgProb);
+            oddsBaseProb = totalConsensus > 0 ? sorted[0][1].avgProb / totalConsensus : sorted[0][1].avgProb;
+        }
+
+        // Allow Claude ±5pts adjustment max on top of bookmaker odds
+        const claudeAdjustment = Math.max(-0.05, Math.min(0.05, rawProb - oddsBaseProb));
+        researchProb = oddsBaseProb + claudeAdjustment;
+    } else if (liveContext.ensemble?.shouldTrade && liveContext.ensemble.disagreement < 0.15) {
+        // GOOD CASE: Multi-model consensus with strong agreement
+        // Weight ensemble 60%, Claude 40% (ensemble reduces single-model bias)
+        researchProb = liveContext.ensemble.consensusProbability * 0.6 + rawProb * 0.4;
+        // Still shrink toward 50% by 25% to account for collective LLM overconfidence
+        researchProb = 0.5 + (researchProb - 0.5) * 0.75;
+    } else {
+        // WORST CASE: Claude alone — apply aggressive shrinkage
+        // Only trust 30% of Claude's deviation from 50% (was 40%)
+        let shrinkage = 0.30;
+        if (liveContext.news?.headlines?.length > 0) shrinkage += 0.05;
+        if (liveContext.sports) shrinkage += 0.05;
+        shrinkage = Math.min(shrinkage, 0.40); // never trust > 40% without odds/ensemble
+        researchProb = 0.5 + (rawProb - 0.5) * shrinkage;
+    }
+
+    // Clamp to valid range
+    researchProb = Math.max(0.01, Math.min(0.99, researchProb));
     const calibratedEdge = Math.abs(researchProb * 100 - yesPrice);
 
     // ── INFORMATION QUALITY GATE: Don't trade blind ──
@@ -442,11 +533,12 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         };
     }
 
-    // If calibrated edge < 8 points, not worth the fees
-    if (calibratedEdge < 8) {
+    // Require minimum edge: 10pts with odds/ensemble, 12pts without (was 8)
+    const minEdge = liveContext.odds?.consensus ? 10 : 12;
+    if (calibratedEdge < minEdge) {
         return {
-            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Calibrated edge only ${calibratedEdge.toFixed(1)}pts (raw: ${Math.abs(rawProb * 100 - yesPrice).toFixed(1)}pts) — too thin after fees` },
-            rawResponse: `Calibrated prob: ${(researchProb*100).toFixed(0)}% (raw: ${(rawProb*100).toFixed(0)}%, shrinkage: ${shrinkage.toFixed(2)})`,
+            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Calibrated edge only ${calibratedEdge.toFixed(1)}pts (need ≥${minEdge}pts). Raw: ${Math.abs(rawProb * 100 - yesPrice).toFixed(1)}pts` },
+            rawResponse: `Calibrated prob: ${(researchProb*100).toFixed(0)}% (raw: ${(rawProb*100).toFixed(0)}%)`,
         };
     }
 
@@ -490,9 +582,10 @@ function shouldExecute(rec, riskLevel) {
 }
 
 function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSinglePct) {
-    const kelly = Math.min(rec.kellyFraction || 0.1, 0.5);
-    const halfKelly = kelly / 2;
-    let size = budgetLeft * halfKelly;
+    // Claude already returns a fractional Kelly (0-0.25) from the prompt.
+    // Use it directly — don't halve it again (was double-shrinking).
+    const kelly = Math.min(rec.kellyFraction || 0.05, 0.25);
+    let size = budgetLeft * kelly;
     size = Math.min(size, maxPerTrade);
     size = Math.min(size, totalBudget * (maxSinglePct / 100));
     return Math.max(0, size);
