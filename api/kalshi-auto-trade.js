@@ -27,6 +27,8 @@ export default async function handler(req, res) {
         marketLimit = 10,
         maxSingleMarketPct = 20,
         series_ticker,
+        existingPositions = [],  // tickers we already own
+        maxTradesPerCycle = 2,   // cap trades per cycle
     } = req.body;
 
     const anthropicKey = req.headers['x-anthropic-key'] || process.env.ANTHROPIC_API_KEY;
@@ -117,9 +119,20 @@ export default async function handler(req, res) {
         report.marketsScanned = allMarkets.length;
 
         let budgetLeft = budget;
+        let tradesThisCycle = 0;
+        const ownedTickers = new Set(existingPositions);
+        const tradedEvents = new Set(); // prevent buying both sides of same event
 
         for (const rawMarket of markets) {
             if (budgetLeft < 1) break;
+            if (tradesThisCycle >= maxTradesPerCycle) break;
+
+            // Skip markets we already own
+            if (ownedTickers.has(rawMarket.ticker)) continue;
+
+            // Skip if we already traded in this event (prevents buying both sides)
+            const eventTicker = rawMarket.event_ticker || '';
+            if (eventTicker && tradedEvents.has(eventTicker)) continue;
 
             const market = normalizeMarket(rawMarket);
 
@@ -205,6 +218,9 @@ export default async function handler(req, res) {
                         trade.hadNews = !!(newsContext?.headlines?.length);
                         report.trades.push(trade);
                         report.tradesExecuted++;
+                        tradesThisCycle++;
+                        ownedTickers.add(rawMarket.ticker);
+                        if (eventTicker) tradedEvents.add(eventTicker);
                         const spent = (priceCents * contracts) / 100;
                         report.totalSpent += spent;
                         budgetLeft -= spent;

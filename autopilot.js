@@ -145,6 +145,8 @@ async function runCycle() {
     log('  Running Trading Bot...');
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
         budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
+        existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
+        maxTradesPerCycle: 2,
     });
     if (bot) {
         stats.totalTrades += bot.tradesExecuted || 0;
