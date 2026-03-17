@@ -205,8 +205,13 @@ export default async function handler(req, res) {
                             const noAsk = ob?.bestNoBid ? 100 - ob.bestNoBid : null;
                             priceCents = noAsk ? noAsk + 1 : (rawMarket.no_ask_dollars ? Math.round(parseFloat(rawMarket.no_ask_dollars) * 100) + 1 : 50);
                         }
-                        priceCents = Math.min(priceCents, 99); // cap at 99¢
-                        const contracts = Math.min(20, Math.floor((tradeAmount * 100) / priceCents)); // Max 20 contracts per order
+                        priceCents = Math.min(priceCents, 99);
+                        // EXECUTION PRICE CHECK: verify price is still in 25-75¢ range
+                        if (priceCents < 25 || priceCents > 75) {
+                            report.analyses[report.analyses.length - 1].skipped = `execution price ${priceCents}¢ outside 25-75¢ range`;
+                            continue;
+                        }
+                        const contracts = Math.min(20, Math.floor((tradeAmount * 100) / priceCents));
 
                         if (contracts < 1) continue;
 
