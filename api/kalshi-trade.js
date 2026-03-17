@@ -1,7 +1,7 @@
 // Vercel Serverless Function — Trade execution via Kalshi API
 // Handles both BUY and SELL orders using RSA-PSS signed requests.
 
-import { placeOrder, getOrderBook, summarizeOrderBook } from './lib/kalshi.js';
+import { placeOrder, getOrderBook, summarizeOrderBook, getMarket as getKalshiMarket } from './lib/kalshi.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -48,17 +48,39 @@ async function executeLiveTrade(res, params) {
 
         // For sells: use best bid MINUS 1¢ to guarantee fill (undercut buyers)
         // For buys: use best ask PLUS 1¢ to guarantee fill
+        const isNo = side.toLowerCase() === 'no';
         let tradePrice = price;
         if (!tradePrice) {
             if (isSell) {
-                const bestBid = ob?.bestYesBid || ob?.midpoint;
-                tradePrice = bestBid ? Math.max(1, bestBid - 1) : 50;
+                // For YES sells: use best YES bid. For NO sells: use best NO bid (100 - bestYesAsk)
+                let bestBid;
+                if (isNo) {
+                    bestBid = ob?.bestYesAsk ? (100 - ob.bestYesAsk) : (ob?.midpoint ? (100 - ob.midpoint) : null);
+                } else {
+                    bestBid = ob?.bestYesBid || ob?.midpoint || null;
+                }
+                // Use last_price as fallback instead of hardcoded 50
+                if (bestBid && bestBid > 0) {
+                    tradePrice = Math.max(1, bestBid - 1);
+                } else {
+                    // Last resort: fetch market data for last_price
+                    try {
+                        const mkt = await getKalshiMarket(ticker);
+                        const m = mkt.market || mkt;
+                        const lastPrice = Math.round((parseFloat(m.last_price_dollars) || 0.5) * 100);
+                        tradePrice = isNo ? Math.max(1, (100 - lastPrice) - 1) : Math.max(1, lastPrice - 1);
+                    } catch {
+                        tradePrice = 50; // absolute last resort
+                    }
+                }
             } else {
                 tradePrice = ob?.bestYesAsk ? ob.bestYesAsk + 1 : (ob?.midpoint || 50);
             }
         } else if (isSell) {
             // Always sell at or below best bid to fill immediately
-            const bestBid = ob?.bestYesBid;
+            const bestBid = isNo
+                ? (ob?.bestYesAsk ? (100 - ob.bestYesAsk) : null)
+                : (ob?.bestYesBid || null);
             if (bestBid) tradePrice = Math.min(tradePrice, Math.max(1, bestBid - 1));
         }
 
