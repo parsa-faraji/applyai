@@ -30,6 +30,9 @@ export default async function handler(req, res) {
         maxSingleMarketPct = 20,
         series_ticker,
         existingPositions = [],  // tickers we already own
+        existingEventTickers = [],  // event_tickers of current positions (both-sides guard)
+        recentlyExited = [],        // tickers/event_tickers exited recently (cooldown)
+        sessionTradedTickers = [],  // tickers already traded this session (no duplicates)
         maxTradesPerCycle = 2,   // cap trades per cycle
     } = req.body;
 
@@ -141,6 +144,9 @@ export default async function handler(req, res) {
         let tradesThisCycle = 0;
         const ownedTickers = new Set(existingPositions);
         const tradedEvents = new Set(); // prevent buying both sides of same event
+        const recentlyExitedSet = new Set(recentlyExited);
+        const existingEventSet = new Set(existingEventTickers);
+        const sessionTradedSet = new Set(sessionTradedTickers);
 
 
         for (const rawMarket of markets) {
@@ -153,6 +159,16 @@ export default async function handler(req, res) {
             // Skip if we already traded in this event (prevents buying both sides)
             const eventTicker = rawMarket.event_ticker || '';
             if (eventTicker && tradedEvents.has(eventTicker)) continue;
+
+            // Skip recently exited markets (2h cooldown — don't re-enter after a loss)
+            if (recentlyExitedSet.has(rawMarket.ticker)) continue;
+            if (eventTicker && recentlyExitedSet.has(eventTicker)) continue;
+
+            // Skip markets already traded this session (prevent duplicate resting orders)
+            if (sessionTradedSet.has(rawMarket.ticker)) continue;
+
+            // Skip if we already hold a position in this event (both-sides guard)
+            if (eventTicker && existingEventSet.has(eventTicker)) continue;
 
             const market = normalizeMarket(rawMarket);
 
@@ -176,6 +192,18 @@ export default async function handler(req, res) {
                         ticker: rawMarket.ticker,
                         recommendation: { action: 'HOLD', reasoning: 'Spread too wide — skipping analysis' },
                         skipped: `spread ${ob.spreadPct.toFixed(1)}% > 5%`,
+                    });
+                    continue;
+                }
+
+                // Sports markets REQUIRE bookmaker odds — Claude alone can't price sports
+                const SPORTS_TICKER_RE = /^KX(NBA|NFL|NHL|MLB|NCAA|NCAAMB|NCAAF|UFC|PGA|ATP|WTA|MLS|WNBA|SOCCER|EUROLEAGUE|CS2|COLLEGE)/i;
+                if (SPORTS_TICKER_RE.test(rawMarket.ticker) && allOdds.length === 0) {
+                    report.analyses.push({
+                        market: market.question,
+                        ticker: rawMarket.ticker,
+                        recommendation: { action: 'HOLD', reasoning: 'Sports market with no bookmaker odds — skipping' },
+                        skipped: 'no odds data for sports market',
                     });
                     continue;
                 }
@@ -274,6 +302,7 @@ export default async function handler(req, res) {
                         trade.hadNews = !!(newsContext?.headlines?.length);
                         trade.category = category;
                         trade.strategy = 'auto-trade';
+                        trade.eventTicker = eventTicker;
 
                         // Persist to trade log
                         try { logTrade(trade); } catch {}

@@ -18,6 +18,7 @@ const SPORT_KEYS = [
     'icehockey_nhl',
     'soccer_epl',
     'soccer_usa_mls',
+    'soccer_uefa_champs_league',
     'mma_mixed_martial_arts',
     'basketball_euroleague',
 ];
@@ -52,14 +53,35 @@ export async function getOdds(sportKey, apiKey, markets = 'h2h,spreads,totals') 
  */
 export async function getAllSportsOdds(apiKey) {
     const allOdds = [];
-    // Fetch top sports in parallel (uses ~10 API calls)
+    let successes = 0;
+    let failures = 0;
+    // Fetch top sports in parallel (uses ~11 API calls)
     const results = await Promise.allSettled(
-        SPORT_KEYS.map(sport => getOdds(sport, apiKey).catch(() => []))
+        SPORT_KEYS.map(async sport => {
+            try {
+                const events = await getOdds(sport, apiKey);
+                return { sport, events: Array.isArray(events) ? events : [] };
+            } catch (err) {
+                console.error(`  Odds API error [${sport}]: ${err.message}`);
+                return { sport, events: [], error: err.message };
+            }
+        })
     );
     for (const r of results) {
-        if (r.status === 'fulfilled' && Array.isArray(r.value)) {
-            allOdds.push(...r.value);
+        if (r.status === 'fulfilled') {
+            if (r.value.error) {
+                failures++;
+            } else {
+                successes++;
+                allOdds.push(...r.value.events);
+            }
+        } else {
+            failures++;
+            console.error(`  Odds API rejected: ${r.reason}`);
         }
+    }
+    if (failures > 0 && allOdds.length === 0) {
+        console.error(`  ⚠ Odds API: ALL ${failures} sport fetches failed — check API key and quota`);
     }
     return allOdds;
 }

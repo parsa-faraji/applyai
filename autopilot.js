@@ -64,6 +64,8 @@ const stats = {
     estimatedApiCost: 0,
     cyclesRun: 0,
     startTime: Date.now(),
+    recentExits: new Map(),      // ticker/event_ticker → timestamp (2h cooldown)
+    sessionTrades: new Set(),    // tickers the bot has traded this session
 };
 
 async function callEndpoint(name, path, body = {}) {
@@ -145,6 +147,9 @@ async function runCycle() {
                             });
                             if (sellResult?.trade) {
                                 stats.totalSells++;
+                                stats.recentExits.set(exit.ticker, Date.now());
+                                const exitedPos = positions.find(p => p.ticker === exit.ticker);
+                                if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
                                 log(`    ✓ EXIT: ${Math.abs(shares)} ${side.toUpperCase()} of ${exit.ticker} @ ${sellResult.trade.price}¢`);
                             }
                         } catch (err) {
@@ -205,14 +210,27 @@ async function runCycle() {
 
     // 4. Trading Bot (Bull vs Bear) — RE-ENABLED with fixed calibration
     log('  Running Trading Bot...');
+    // Clean up expired exit cooldowns (2 hours)
+    const COOLDOWN_MS = 2 * 60 * 60 * 1000;
+    for (const [key, ts] of stats.recentExits) {
+        if (Date.now() - ts > COOLDOWN_MS) stats.recentExits.delete(key);
+    }
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
         budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
+        existingEventTickers: (sync?.positions || []).map(p => p.event_ticker).filter(Boolean),
+        recentlyExited: [...stats.recentExits.keys()],
+        sessionTradedTickers: [...stats.sessionTrades],
         maxTradesPerCycle: 2,
     });
     if (bot) {
         stats.totalTrades += bot.tradesExecuted || 0;
         stats.totalBuys += bot.tradesExecuted || 0;
+        // Track traded tickers to prevent re-entering same markets across cycles
+        for (const t of (bot.trades || [])) {
+            if (t.ticker) stats.sessionTrades.add(t.ticker);
+            if (t.eventTicker) stats.sessionTrades.add(t.eventTicker);
+        }
         log(`  Bot: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
         for (const t of (bot.trades || [])) {
             log(`    → ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
@@ -276,6 +294,9 @@ async function runCycle() {
                         });
                         if (sellResult?.trade) {
                             stats.totalSells++;
+                            stats.recentExits.set(exit.ticker, Date.now());
+                            const exitedPos = positions.find(p => p.ticker === exit.ticker);
+                            if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
                             log(`    ✓ Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
                         } else {
                             log(`    ✗ Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
