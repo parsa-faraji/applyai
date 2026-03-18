@@ -163,6 +163,58 @@ async function runCycle() {
         }
     }
 
+    // CASH GUARD: If cash is too low to trade, skip expensive Claude-based strategies
+    const cashBalance = sync?.balance || 0;
+    if (cashBalance < 2) {
+        log(`  ⚠ LOW CASH: $${cashBalance.toFixed(2)} — skipping trading strategies (saves API costs)`);
+        // Jump straight to monitor (still manage existing positions)
+        const positions = sync?.positions || [];
+        if (positions.length > 0) {
+            log('  Running Monitor...');
+            const mon = await callEndpoint('Monitor', '/api/monitor', {
+                positions, stopLossPct: 30, takeProfitPct: 50, trailingStopPct: 15, spikeThreshold: 15,
+            });
+            if (mon) {
+                log(`  Monitor: ${mon.positionsChecked || 0} checked, ${mon.alerts?.length || 0} alerts, ${mon.actions?.length || 0} actions`);
+                for (const a of (mon.alerts || [])) log(`    ${a.type}: ${a.message}`);
+                const seenTickers = new Set();
+                const exitActions = (mon.actions || []).filter(a => {
+                    if (a.type !== 'exit') return false;
+                    const key = a.ticker || a.tokenId;
+                    if (seenTickers.has(key)) return false;
+                    seenTickers.add(key);
+                    return true;
+                });
+                if (exitActions.length > 0) {
+                    log(`  Executing ${exitActions.length} exit(s)...`);
+                    for (const exit of exitActions) {
+                        const pos = positions.find(p => (p.ticker === exit.ticker) || (p.tokenId === exit.tokenId));
+                        if (!pos) continue;
+                        const shares = exit.shares || pos.position_fp || pos.shares || 0;
+                        if (shares <= 0) continue;
+                        const side = (pos.outcome || 'yes').toLowerCase();
+                        try {
+                            const sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
+                                ticker: exit.ticker || pos.ticker, side, action: 'sell', count: Math.abs(shares),
+                            });
+                            if (sellResult?.trade) {
+                                stats.totalSells++;
+                                stats.recentExits.set(exit.ticker, Date.now());
+                                const exitedPos = positions.find(p => p.ticker === exit.ticker);
+                                if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
+                                log(`    ✓ Sold ${Math.abs(shares)} ${side.toUpperCase()} of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
+                            }
+                        } catch (err) {
+                            log(`    ✗ Sell error: ${err.message}`);
+                        }
+                    }
+                }
+            }
+        }
+        log('═══ Cycle complete (low cash) ═══\n');
+        return;
+    }
+
     // 1b. Cancel stale resting orders (older than 15 min)
     if (sync?.openOrders > 0) {
         log('  Cleaning up stale resting orders...');
@@ -345,7 +397,14 @@ let cycleCount = 0;
 log('Autopilot starting...');
 log(`Server: ${SERVER}`);
 log(`Cycle interval: ${INTERVAL / 60000} minutes`);
-log(`API keys: Anthropic=${HEADERS['X-Anthropic-Key'] ? 'YES' : 'NO'}, Brave=${HEADERS['X-Brave-Key'] ? 'YES' : 'NO'}, Odds=${HEADERS['X-Odds-Key'] ? 'YES' : 'NO'}, OpenRouter=${HEADERS['X-OpenRouter-Key'] ? 'YES' : 'NO'}, Kalshi=${HEADERS['X-Kalshi-Key-Id'] ? 'YES' : 'NO'}`);
+log('API Keys:');
+log(`  Anthropic (Claude): ${HEADERS['X-Anthropic-Key'] ? '✓ SET' : '✗ MISSING — bot cannot trade'}`);
+log(`  Kalshi:             ${HEADERS['X-Kalshi-Key-Id'] ? '✓ SET' : '✗ MISSING — no live trading'}`);
+log(`  Brave Search:       ${HEADERS['X-Brave-Key'] ? '✓ SET' : '✗ MISSING — no news context'}`);
+log(`  Odds API:           ${HEADERS['X-Odds-Key'] ? '✓ SET' : '✗ MISSING — sports trades disabled'}`);
+log(`  OpenRouter:         ${HEADERS['X-OpenRouter-Key'] ? '✓ SET' : '○ NOT SET — ensemble disabled (saves money)'}`);
+log(`  FRED:               ${process.env.FRED_API_KEY ? '✓ SET' : '○ DEMO KEY — may rate-limit'}`);
+log(`  API-Sports:         ${process.env.API_SPORTS_KEY ? '✓ SET' : '○ NOT SET — no injury data'}`);
 log('');
 
 // Run immediately, then on interval

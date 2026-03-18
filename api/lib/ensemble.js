@@ -49,7 +49,10 @@ async function queryModel(model, prompt, keys) {
                     messages: [{ role: 'user', content: prompt }],
                 }),
             });
-            if (!resp.ok) return null;
+            if (!resp.ok) {
+                console.error(`  Ensemble [${model.label}]: Anthropic API ${resp.status}`);
+                return null;
+            }
             const data = await resp.json();
             text = data.content?.[0]?.text || '';
 
@@ -68,7 +71,11 @@ async function queryModel(model, prompt, keys) {
                     messages: [{ role: 'user', content: prompt }],
                 }),
             });
-            if (!resp.ok) return null;
+            if (!resp.ok) {
+                const errText = await resp.text().catch(() => '');
+                console.error(`  Ensemble [${model.label}]: OpenRouter ${resp.status} — ${errText.slice(0, 100)}`);
+                return null;
+            }
             const data = await resp.json();
             text = data.choices?.[0]?.message?.content || '';
         }
@@ -86,7 +93,8 @@ async function queryModel(model, prompt, keys) {
             confidence: parsed.confidence || 'medium',
             reasoning: parsed.reasoning || '',
         };
-    } catch {
+    } catch (err) {
+        console.error(`  Ensemble [${model.label}]: ${err.message}`);
         return null;
     }
 }
