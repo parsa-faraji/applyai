@@ -382,7 +382,15 @@ async function runCycle() {
             if (activeCats.length > 0) {
                 log('  Performance by category:');
                 for (const [cat, s] of activeCats) {
-                    log(`    ${cat}: ${s.wins}W/${s.losses}L (${(s.winRate * 100).toFixed(0)}%) P&L: $${s.totalPnl.toFixed(2)}`);
+                    const status = s.trades >= 5 && s.winRate < 0.40 ? ' ⚠ UNDERPERFORMING' : '';
+                    log(`    ${cat}: ${s.wins}W/${s.losses}L (${(s.winRate * 100).toFixed(0)}%) P&L: $${s.totalPnl.toFixed(2)}${status}`);
+                }
+            }
+            // Edge decay detection: warn if overall strategy is losing after 10+ resolved trades
+            const strats = learn.performanceByStrategy || {};
+            for (const [strat, s] of Object.entries(strats)) {
+                if (s.trades >= 10 && s.winRate < 0.40) {
+                    log(`  ⚠ EDGE DECAY: ${strat} has ${(s.winRate * 100).toFixed(0)}% win rate over ${s.trades} trades — consider pausing`);
                 }
             }
         }

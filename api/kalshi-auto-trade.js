@@ -112,6 +112,14 @@ export default async function handler(req, res) {
             if (/will .+ (score|record|have|get|throw|rush for|pass for)/i.test(t) && /\d+/.test(t)) return false;
             // Social media / streaming / app store (no data source)
             if (/twitter|tweet|followers|subscribers|downloads|app store|streaming/i.test(t)) return false;
+            // Economics: CPI, Fed, GDP, unemployment — LLMs have 50% accuracy (KalshiBench)
+            if (/\bcpi\b|inflation rate|consumer price|unemployment rate|jobless|nonfarm payroll/i.test(t)) return false;
+            if (/\bfed\b.*rate|federal fund|fomc|rate (hike|cut|decision)/i.test(t)) return false;
+            if (/\bgdp\b|gross domestic/i.test(t)) return false;
+            // Crypto: LLMs have 36% accuracy — worse than random (KalshiBench)
+            if (/bitcoin|ethereum|crypto|btc|eth|solana|dogecoin/i.test(t)) return false;
+            // Mentions/social: 52% accuracy — no edge
+            if (/\btweet\b|mention|say.*about|post.*about/i.test(t)) return false;
 
             // === QUALITY FILTERS ===
             // Price: only 25-75¢ (sweet spot for edge vs fees)
@@ -148,6 +156,15 @@ export default async function handler(req, res) {
         const existingEventSet = new Set(existingEventTickers);
         const sessionTradedSet = new Set(sessionTradedTickers);
 
+        // Game-level correlation guard: extract game keys from existing positions
+        // Different bet types on the same game (spread, totals, moneyline) share a
+        // common game key like "26MAR18PORIND" — extract this to prevent correlated bets
+        const existingGameKeys = new Set();
+        for (const ticker of existingPositions) {
+            const gameKey = extractGameKey(ticker);
+            if (gameKey) existingGameKeys.add(gameKey);
+        }
+
 
         for (const rawMarket of markets) {
             if (budgetLeft < 1) break;
@@ -169,6 +186,11 @@ export default async function handler(req, res) {
 
             // Skip if we already hold a position in this event (both-sides guard)
             if (eventTicker && existingEventSet.has(eventTicker)) continue;
+
+            // Game-level correlation guard: different bet types on same game
+            // (e.g., moneyline + spread + totals all for Portland at Indiana)
+            const gameKey = extractGameKey(rawMarket.ticker);
+            if (gameKey && existingGameKeys.has(gameKey)) continue;
 
             const market = normalizeMarket(rawMarket);
 
@@ -315,6 +337,7 @@ export default async function handler(req, res) {
                         tradesThisCycle++;
                         ownedTickers.add(rawMarket.ticker);
                         if (eventTicker) tradedEvents.add(eventTicker);
+                        if (gameKey) existingGameKeys.add(gameKey);
                         const spent = (priceCents * contracts) / 100;
                         report.totalSpent += spent;
                         budgetLeft -= spent;
@@ -696,4 +719,18 @@ function decodeKey(key) {
         if (decoded.includes('-----BEGIN')) return decoded;
     } catch {}
     return key;
+}
+
+/**
+ * Extract a game-level key from a Kalshi ticker to detect correlated bets.
+ * Tickers like KXNBASPREAD-26MAR18PORIND-POR13, KXNBATOTAL-26MAR18PORIND-249,
+ * KXNBAGAME-26MAR18PORIND-POR all share the game key "26MAR18PORIND".
+ * Returns the shared game portion or null if not a sports ticker.
+ */
+function extractGameKey(ticker) {
+    if (!ticker) return null;
+    // Pattern: KX<TYPE>-<DATE><TEAMS>-<DETAIL>
+    // e.g. KXNBASPREAD-26MAR18PORIND-POR13 → 26MAR18PORIND
+    const match = ticker.match(/^KX[A-Z]+-(\d{2}[A-Z]{3}\d{2}[A-Z]+)/);
+    return match ? match[1] : null;
 }
