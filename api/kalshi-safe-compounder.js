@@ -39,6 +39,7 @@ export default async function handler(req, res) {
         maxPerTrade = 25,
         dryRun = true,
         marketLimit = 20,
+        existingPositions = [],
     } = req.body || {};
 
     const anthropicKey = req.headers['x-anthropic-key'] || process.env.ANTHROPIC_API_KEY;
@@ -115,9 +116,13 @@ export default async function handler(req, res) {
         // Limit how many we analyze (Claude calls are expensive)
         const toAnalyze = candidates.slice(0, parseInt(marketLimit));
         let budgetLeft = budget;
+        const ownedTickers = new Set(existingPositions);
 
         for (const rawMarket of toAnalyze) {
             if (budgetLeft < 1) break;
+
+            // Skip markets we already have a position in (prevent stacking orders)
+            if (ownedTickers.has(rawMarket.ticker)) continue;
 
             const market = normalizeMarket(rawMarket);
             const yesPriceDollars = parseFloat(rawMarket.last_price_dollars) || parseFloat(rawMarket.yes_bid_dollars) || 0;

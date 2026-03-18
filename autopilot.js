@@ -228,6 +228,7 @@ async function runCycle() {
     log('  Running Safe Compounder...');
     const safe = await callEndpoint('Safe Compounder', '/api/kalshi-safe-compounder', {
         budget: 50, maxPerTrade: 10, dryRun: false, marketLimit: 20,
+        existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
     });
     if (safe) {
         log(`  Safe: scanned ${safe.marketsScanned || '?'}, ${safe.candidates || 0} candidates, ${safe.tradesExecuted || 0} trades`);

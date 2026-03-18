@@ -422,11 +422,19 @@ ${news.headlines.map((h, i) => `- ${h}${news.snippets?.[i] ? ': ' + news.snippet
 async function runResearchStage(market, apiKey, liveContext) {
     const researchContext = buildResearchContext(liveContext);
 
-    const prompt = `You are a research analyst. Based on the following information, what is the probability of this event? DO NOT consider market prices — give your independent estimate.
+    const prompt = `You are a calibrated research analyst estimating event probabilities. Based ONLY on the evidence below, estimate the probability. DO NOT consider any market price.
 
 Question: ${market.question}
 Description: ${market.description || 'N/A'}
 ${researchContext}
+
+CALIBRATION RULES:
+- Consider base rates: what % of similar events happen historically?
+- If key information is missing, stay closer to 50%
+- Probabilities above 85% or below 15% require overwhelming evidence
+- Use precise values (73%, not "about 70%")
+- State what you DON'T know — uncertainty should widen your estimate toward 50%
+- Prediction markets are efficient; explain specifically why the market might be wrong
 
 Reply JSON: {"probability": 0.0-1.0, "keyFactors": ["factor1", "factor2"], "confidence": "low"|"medium"|"high"}`;
 
@@ -582,13 +590,17 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     researchProb = Math.max(0.01, Math.min(0.99, researchProb));
     const calibratedEdge = Math.abs(researchProb * 100 - yesPrice);
 
-    // ── INFORMATION QUALITY GATE: Don't trade blind ──
-    // If no external data at all, skip (Claude alone is not enough)
-    const hasExternalData = !!(liveContext.odds || liveContext.news?.headlines?.length || liveContext.sports || liveContext.economic || liveContext.weather);
-    if (!hasExternalData) {
+    // ── INFORMATION QUALITY GATE: Require RELEVANT external data ──
+    // Bookmaker odds are the gold standard (sharp money). News with 2+ headlines is decent.
+    // ESPN scores alone are weak signal. FRED/NOAA data is only useful for matching markets.
+    const hasOdds = !!liveContext.odds?.consensus;
+    const hasRealNews = !!(liveContext.news?.headlines?.length >= 2 && liveContext.news.provider !== 'polymarket_related');
+    const hasEnsemble = !!(liveContext.ensemble?.shouldTrade);
+    const hasRelevantData = hasOdds || hasRealNews || hasEnsemble;
+    if (!hasRelevantData) {
         return {
-            recommendation: { action: 'HOLD', confidence: 'low', edge: 0, kellyFraction: 0, reasoning: 'No external data — Claude alone is not reliable enough to trade' },
-            rawResponse: 'Skipped: no external data available',
+            recommendation: { action: 'HOLD', confidence: 'low', edge: 0, kellyFraction: 0, reasoning: 'Insufficient data — need odds, real news (2+ headlines), or ensemble agreement' },
+            rawResponse: 'Skipped: no relevant external data',
         };
     }
 
@@ -601,35 +613,34 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         };
     }
 
-    // ── Stage 2: Bull vs Bear debate (parallel) ──
-    const { bull, bear, bullRaw, bearRaw } = await runBullBearStage(market, apiKey, researchProb, yesPrice);
+    // ── DIRECT DECISION: Skip bull/bear debate (research shows it adds cost, not signal) ──
+    // The research stage + calibration + edge gate already filters well.
+    // Bull/bear debate was Claude arguing with itself using the same information — no new signal.
+    // This saves ~70% of Claude API cost per analyzed market.
 
-    // ── Stage 3: Final decision ──
-    const final = await runFinalDecision(market, apiKey, researchProb, yesPrice, bull, bear, riskLevel, budgetLeft, maxPerTrade);
+    const isYes = researchProb * 100 > yesPrice; // model thinks YES is underpriced
+    const action = calibratedEdge >= minEdge ? (isYes ? 'BUY YES' : 'BUY NO') : 'HOLD';
 
-    // Merge debate data into the recommendation for frontend display
+    // Server-side Kelly from edge (don't rely on Claude to compute this)
+    const winProb = isYes ? researchProb : (1 - researchProb);
+    const costProb = isYes ? yesPrice / 100 : (100 - yesPrice) / 100;
+    const b = costProb > 0 && costProb < 1 ? (1 / costProb - 1) : 1;
+    const kellyFull = b > 0 ? (winProb * b - (1 - winProb)) / b : 0;
+    const kellyFraction = Math.max(0, Math.min(0.25, kellyFull * 0.25));
+
     const recommendation = {
-        ...final.result,
+        action,
+        confidence: research.result.confidence || 'medium',
+        edge: calibratedEdge,
+        kellyFraction,
+        reasoning: `Research: ${(researchProb * 100).toFixed(0)}% vs market ${yesPrice}¢ (${calibratedEdge.toFixed(1)}pt edge). ${research.result.keyFactors?.join('; ') || ''}`,
         researchProbability: researchProb,
-        rawProbability: rawProb,  // pre-calibration estimate for learning loop
+        rawProbability: rawProb,
         researchKeyFactors: research.result.keyFactors || [],
         researchConfidence: research.result.confidence || 'low',
-        bullCase: bull.case,
-        bullConviction: final.result.bullConviction ?? bull.conviction,
-        bullEstimatedEdge: bull.estimatedEdge || 0,
-        bearCase: bear.case,
-        bearRisks: bear.risks || [],
-        bearConviction: final.result.bearConviction ?? bear.conviction,
     };
 
-    const rawResponse = [
-        '=== RESEARCH ===', research.rawText,
-        '=== BULL ===', bullRaw,
-        '=== BEAR ===', bearRaw,
-        '=== FINAL ===', final.rawText,
-    ].join('\n\n');
-
-    return { recommendation, rawResponse };
+    return { recommendation, rawResponse: research.rawText };
 }
 
 // ─── Trade Execution ───

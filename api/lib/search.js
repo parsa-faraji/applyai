@@ -79,8 +79,9 @@ export async function searchNews(query, keys = {}) {
 }
 
 async function searchBrave(query, apiKey) {
-    // Add "prediction odds preview" to find betting-relevant content
-    const enrichedQuery = query + ' prediction odds preview';
+    // Use the query as-is — appending "prediction odds preview" pollutes
+    // non-sports markets with market commentary instead of actual news
+    const enrichedQuery = query;
     const params = new URLSearchParams({
         q: enrichedQuery,
         count: MAX_RESULTS.toString(),

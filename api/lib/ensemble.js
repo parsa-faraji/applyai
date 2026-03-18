@@ -16,11 +16,13 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
  * Weights from the top Kalshi bot: Grok 30%, Claude 20%, GPT 20%, Gemini 15%, DeepSeek 15%
  * We skip Grok (requires separate xAI account) and reweight.
  */
+// Claude is excluded — it already runs in the research stage. Including it here
+// would double-count Claude's opinion and create a feedback loop (ensemble result
+// gets fed back to Claude in the research context).
 const MODELS = [
-    { id: 'claude', provider: 'anthropic', model: 'claude-sonnet-4-20250514', weight: 0.30, label: 'Claude' },
-    { id: 'gpt4o', provider: 'openrouter', model: 'openai/gpt-4o', weight: 0.25, label: 'GPT-4o' },
-    { id: 'gemini', provider: 'openrouter', model: 'google/gemini-2.5-flash-preview', weight: 0.25, label: 'Gemini' },
-    { id: 'deepseek', provider: 'openrouter', model: 'deepseek/deepseek-r1', weight: 0.20, label: 'DeepSeek' },
+    { id: 'gpt4o', provider: 'openrouter', model: 'openai/gpt-4o', weight: 0.35, label: 'GPT-4o' },
+    { id: 'gemini', provider: 'openrouter', model: 'google/gemini-2.5-flash-preview', weight: 0.35, label: 'Gemini' },
+    { id: 'deepseek', provider: 'openrouter', model: 'deepseek/deepseek-r1', weight: 0.30, label: 'DeepSeek' },
 ];
 
 /**
@@ -141,21 +143,29 @@ ${context}
         return { consensusProbability: 0.5, disagreement: 1, confidence: 'none', models: [], shouldTrade: false };
     }
 
-    // Flat-weighted average (DO NOT amplify self-reported confidence —
-    // LLMs are systematically overconfident in their confidence labels.
-    // High-confidence claims get MORE weight under the old system, rewarding
-    // the most overconfident model. Flat weights are empirically better.)
-    const confMultiplier = { low: 0.7, medium: 1.0, high: 1.0 }; // only penalize low, don't boost high
+    // Geometric mean of odds (proven best aggregation — Brier 0.116 vs 0.122 for arithmetic mean)
+    // Converts probabilities to log-odds, takes weighted average, converts back.
+    // Then extremize with a=2.0 (push away from 50% — models tend to underweight strong signals)
+    const EXTREMIZE_A = 2.0;
     let totalWeight = 0;
-    let weightedSum = 0;
+    let weightedLogOdds = 0;
 
     for (const m of successful) {
-        const adjWeight = m.weight * (confMultiplier[m.confidence] || 1.0);
-        weightedSum += adjWeight * m.probability;
-        totalWeight += adjWeight;
+        const p = Math.max(0.01, Math.min(0.99, m.probability));
+        const logOdds = Math.log(p / (1 - p));
+        weightedLogOdds += m.weight * logOdds;
+        totalWeight += m.weight;
     }
 
-    const consensusProbability = totalWeight > 0 ? weightedSum / totalWeight : 0.5;
+    let rawConsensus = totalWeight > 0
+        ? 1 / (1 + Math.exp(-(weightedLogOdds / totalWeight)))
+        : 0.5;
+
+    // Extremize: push probabilities away from 50% (aggregated forecasts are too moderate)
+    // Formula: odds^a where a > 1
+    const consensusOdds = rawConsensus / (1 - rawConsensus);
+    const extremizedOdds = Math.pow(consensusOdds, EXTREMIZE_A);
+    const consensusProbability = Math.max(0.01, Math.min(0.99, extremizedOdds / (1 + extremizedOdds)));
 
     // Disagreement = standard deviation across model probabilities
     const probs = successful.map(m => m.probability);
