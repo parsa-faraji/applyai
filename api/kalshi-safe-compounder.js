@@ -443,6 +443,8 @@ async function executeTrade(params) {
 
     try {
         const privateKeyPem = decodeKey(kalshiPrivateKey);
+        // Set 20-minute expiration so stale orders don't fill at bad prices
+        const expirationTs = Math.floor(Date.now() / 1000) + 20 * 60;
         const result = await placeOrder(
             {
                 ticker,
@@ -451,6 +453,7 @@ async function executeTrade(params) {
                 count,
                 type: 'limit',
                 no_price: noPriceCents,
+                expiration_ts: expirationTs,
             },
             { apiKeyId: kalshiKeyId, privateKeyPem }
         );

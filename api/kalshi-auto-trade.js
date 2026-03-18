@@ -247,6 +247,7 @@ export default async function handler(req, res) {
                         market: market.question,
                         marketPrice: parseFloat(rawMarket.last_price_dollars) || null,
                         calibratedProbability: rec.researchProbability ?? null,
+                        rawProbability: rec.rawProbability ?? null,
                         edge: rec.edge ?? null,
                         action: rec.action,
                         confidence: rec.confidence,
@@ -265,13 +266,14 @@ export default async function handler(req, res) {
 
                     if (tradeAmount >= 1) {
                         const isYes = rec.action.includes('YES');
-                        // Use best ask from order book + 1¢ to ensure fill (hit existing sellers)
+                        // Use maker orders (ask - 1¢) to save on fees (4x cheaper than taker)
+                        // Trades may not fill immediately but the cost savings are significant
                         let priceCents;
                         if (isYes) {
-                            priceCents = ob?.bestYesAsk ? ob.bestYesAsk + 1 : (rawMarket.yes_ask_dollars ? Math.round(parseFloat(rawMarket.yes_ask_dollars) * 100) + 1 : 50);
+                            priceCents = ob?.bestYesAsk ? ob.bestYesAsk - 1 : (rawMarket.yes_ask_dollars ? Math.round(parseFloat(rawMarket.yes_ask_dollars) * 100) - 1 : 50);
                         } else {
                             const noAsk = ob?.bestNoBid ? 100 - ob.bestNoBid : null;
-                            priceCents = noAsk ? noAsk + 1 : (rawMarket.no_ask_dollars ? Math.round(parseFloat(rawMarket.no_ask_dollars) * 100) + 1 : 50);
+                            priceCents = noAsk ? noAsk - 1 : (rawMarket.no_ask_dollars ? Math.round(parseFloat(rawMarket.no_ask_dollars) * 100) - 1 : 50);
                         }
                         priceCents = Math.min(priceCents, 99);
                         // EXECUTION PRICE CHECK: verify price is still in 25-75¢ range
@@ -298,6 +300,7 @@ export default async function handler(req, res) {
                         trade.reasoning = rec.reasoning;
                         trade.confidence = rec.confidence;
                         trade.edge = rec.edge;
+                        trade.rawProbability = rec.rawProbability || null;
                         trade.hadOdds = !!oddsData?.consensus;
                         trade.hadNews = !!(newsContext?.headlines?.length);
                         trade.category = category;
@@ -585,6 +588,7 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     const recommendation = {
         ...final.result,
         researchProbability: researchProb,
+        rawProbability: rawProb,  // pre-calibration estimate for learning loop
         researchKeyFactors: research.result.keyFactors || [],
         researchConfidence: research.result.confidence || 'low',
         bullCase: bull.case,
@@ -615,9 +619,23 @@ function shouldExecute(rec, riskLevel) {
 }
 
 function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSinglePct) {
-    // Claude already returns a fractional Kelly (0-0.25) from the prompt.
-    // Use it directly — don't halve it again (was double-shrinking).
-    const kelly = Math.min(rec.kellyFraction || 0.05, 0.25);
+    // Server-side Kelly verification — don't trust Claude's self-reported fraction.
+    // Compute actual Kelly from the edge and price, then take the minimum.
+    const edge = rec.edge || 0;
+    const price = rec.researchProbability || 0.5;
+
+    // Mathematical Kelly: f* = (p*b - q) / b where p=win_prob, b=net_odds, q=1-p
+    // For a binary market: simplified to (p - market_price) / (1 - market_price)
+    const marketProb = price; // approximate
+    const computedKelly = edge > 0 ? Math.min(0.25, Math.max(0, edge / 100)) : 0;
+
+    // Take the MINIMUM of Claude's suggestion and our computed value
+    const claudeKelly = Math.min(rec.kellyFraction || 0.05, 0.25);
+    const kelly = Math.min(claudeKelly, computedKelly > 0 ? computedKelly : claudeKelly);
+
+    // If edge is zero or negative, don't trade regardless of what Claude said
+    if (edge <= 0) return 0;
+
     let size = budgetLeft * kelly;
     size = Math.min(size, maxPerTrade);
     size = Math.min(size, totalBudget * (maxSinglePct / 100));

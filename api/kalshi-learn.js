@@ -128,8 +128,9 @@ export default async function handler(req, res) {
             performance.resolved.add(trade.ticker);
 
             // 4. Update Platt scaling calibration
-            // rawProb = what Claude estimated, actualOutcome = 1 if event happened
-            const rawProb = trade.calibratedProbability || trade.researchProbability || null;
+            // MUST use the RAW (pre-calibration) probability, not the calibrated one.
+            // Using calibrated values would cause double-calibration, pushing k→1.0.
+            const rawProb = trade.rawProbability || null;
             if (rawProb != null) {
                 const actual = yesWon ? 1 : 0;
                 updateCalibration(rawProb, actual);
