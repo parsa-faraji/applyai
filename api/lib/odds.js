@@ -3,7 +3,7 @@
  * https://the-odds-api.com/
  *
  * Provides Vegas/bookmaker lines to compare against Kalshi prices.
- * Free tier: 500 requests/month
+ * Caches results in memory to avoid burning API quota every cycle.
  */
 
 const BASE_URL = 'https://api.the-odds-api.com/v4';
@@ -15,13 +15,21 @@ const SPORT_KEYS = [
     'americanfootball_nfl',
     'americanfootball_ncaaf',
     'baseball_mlb',
+    'baseball_ncaa',
     'icehockey_nhl',
     'soccer_epl',
     'soccer_usa_mls',
     'soccer_uefa_champs_league',
+    'soccer_uefa_europa_league',
     'mma_mixed_martial_arts',
     'basketball_euroleague',
+    'tennis_atp_miami_open',
+    'tennis_wta_miami_open',
 ];
+
+// ─── In-memory cache (survives across cycles within a deploy) ───
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+let _oddsCache = { data: [], fetchedAt: 0, apiKey: null };
 
 /**
  * Fetch odds for a specific sport
@@ -30,7 +38,12 @@ const SPORT_KEYS = [
  * @param {string} markets - 'h2h' (moneyline), 'spreads', 'totals'
  * @returns {Array} events with odds from multiple bookmakers
  */
-export async function getOdds(sportKey, apiKey, markets = 'h2h,spreads,totals') {
+/**
+ * Fetch odds for a specific sport.
+ * IMPORTANT: Each market type (h2h, spreads, totals) costs 1 API credit.
+ * Default to h2h only (1 credit) — request spreads/totals only when needed.
+ */
+export async function getOdds(sportKey, apiKey, markets = 'h2h') {
     const params = new URLSearchParams({
         apiKey,
         regions: 'us,us2',
@@ -39,12 +52,37 @@ export async function getOdds(sportKey, apiKey, markets = 'h2h,spreads,totals') 
     });
 
     const resp = await fetch(`${BASE_URL}/sports/${sportKey}/odds?${params}`);
+
+    // Log remaining API quota from response headers
+    const remaining = resp.headers.get('x-requests-remaining');
+    const used = resp.headers.get('x-requests-used');
+    if (remaining != null) {
+        _lastQuota = { remaining: parseInt(remaining), used: parseInt(used), checkedAt: Date.now() };
+        if (parseInt(remaining) < 100) {
+            console.warn(`  ⚠ Odds API quota low: ${remaining} requests remaining (${used} used)`);
+        }
+    }
+
     if (!resp.ok) {
         if (resp.status === 401) throw new Error('Invalid Odds API key');
         if (resp.status === 429) throw new Error('Odds API rate limit');
-        throw new Error(`Odds API ${resp.status}`);
+        if (resp.status === 403) throw new Error('Odds API out of credits');
+        const text = await resp.text().catch(() => '');
+        throw new Error(`Odds API ${resp.status}: ${text.slice(0, 100)}`);
     }
     return resp.json();
+}
+
+// Track API quota
+let _lastQuota = { remaining: null, used: null, checkedAt: 0 };
+export function getOddsQuota() { return _lastQuota; }
+
+/**
+ * Fetch detailed odds (h2h + spreads + totals) for a specific sport.
+ * Costs 3 credits — use sparingly, only for markets being actively analyzed.
+ */
+export async function getDetailedOdds(sportKey, apiKey) {
+    return getOdds(sportKey, apiKey, 'h2h,spreads,totals');
 }
 
 /**
@@ -52,10 +90,20 @@ export async function getOdds(sportKey, apiKey, markets = 'h2h,spreads,totals') 
  * @returns {Array} all events with odds
  */
 export async function getAllSportsOdds(apiKey) {
+    // Return cached data if fresh (saves ~15 API calls per cache hit)
+    const now = Date.now();
+    const ttl = _oddsCache.ttl || CACHE_TTL_MS;
+    if (_oddsCache.apiKey === apiKey && (now - _oddsCache.fetchedAt) < ttl) {
+        const ageMin = ((now - _oddsCache.fetchedAt) / 60000).toFixed(0);
+        console.log(`  Odds cache hit: ${_oddsCache.data.length} events (${ageMin}m old)`);
+        return _oddsCache.data;
+    }
+
     const allOdds = [];
     let successes = 0;
     let failures = 0;
-    // Fetch top sports in parallel (uses ~11 API calls)
+    const errors = [];
+    // Fetch top sports in parallel (uses ~15 API calls)
     const results = await Promise.allSettled(
         SPORT_KEYS.map(async sport => {
             try {
@@ -71,6 +119,7 @@ export async function getAllSportsOdds(apiKey) {
         if (r.status === 'fulfilled') {
             if (r.value.error) {
                 failures++;
+                errors.push(r.value.error);
             } else {
                 successes++;
                 allOdds.push(...r.value.events);
@@ -81,8 +130,14 @@ export async function getAllSportsOdds(apiKey) {
         }
     }
     if (failures > 0 && allOdds.length === 0) {
-        console.error(`  ⚠ Odds API: ALL ${failures} sport fetches failed — check API key and quota`);
+        const uniqueErrors = [...new Set(errors)];
+        console.error(`  ⚠ Odds API: ALL ${failures} sport fetches failed — ${uniqueErrors.join('; ')}`);
     }
+
+    // Cache: 30 min for good data, 5 min for empty (retry sooner on failures)
+    const cacheTTL = allOdds.length > 0 ? CACHE_TTL_MS : 5 * 60 * 1000;
+    _oddsCache = { data: allOdds, fetchedAt: now, apiKey, ttl: cacheTTL };
+
     return allOdds;
 }
 

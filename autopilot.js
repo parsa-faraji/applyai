@@ -70,7 +70,7 @@ const stats = {
 
 async function callEndpoint(name, path, body = {}) {
     // Estimate API cost per endpoint
-    const costMap = { 'Safe Compounder': 0.05, 'Weather Strategy': 0, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50 };
+    const costMap = { 'Safe Compounder': 0.05, 'Weather Strategy': 0, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50, 'Learning': 0 };
     stats.estimatedApiCost += costMap[name] || 0;
     try {
         const resp = await fetch(`${SERVER}${path}`, {
@@ -304,6 +304,33 @@ async function runCycle() {
                     } catch (err) {
                         log(`    ✗ Sell error for ${exit.ticker}: ${err.message}`);
                     }
+                }
+            }
+        }
+    }
+
+    // 8. Learning: check resolved markets every 10 cycles (~100 min)
+    if (stats.cyclesRun % 10 === 0) {
+        log('  Running Learning Check...');
+        const learn = await callEndpoint('Learning', '/api/kalshi-learn', {});
+        if (learn) {
+            if (learn.newResolutions > 0) {
+                log(`  Learning: ${learn.newResolutions} new resolutions`);
+                for (const r of (learn.resolved || [])) {
+                    log(`    ${r.won ? '✓ WON' : '✗ LOST'}: ${r.market?.slice(0, 40)} (${r.strategy}, ${r.side}, P&L: $${r.totalPnl?.toFixed(2)})`);
+                }
+            }
+            const cal = learn.calibrationStats;
+            if (cal) {
+                log(`  Calibration: k=${cal.k?.toFixed(3)}, b=${cal.b?.toFixed(3)}, updates=${cal.updates}, avgLoss=${cal.avgLoss?.toFixed(3) || 'N/A'}`);
+            }
+            // Log category performance if we have data
+            const cats = learn.performanceByCategory || {};
+            const activeCats = Object.entries(cats).filter(([, s]) => s.trades > 0);
+            if (activeCats.length > 0) {
+                log('  Performance by category:');
+                for (const [cat, s] of activeCats) {
+                    log(`    ${cat}: ${s.wins}W/${s.losses}L (${(s.winRate * 100).toFixed(0)}%) P&L: $${s.totalPnl.toFixed(2)}`);
                 }
             }
         }
