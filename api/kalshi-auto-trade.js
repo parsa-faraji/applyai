@@ -597,10 +597,10 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     const hasRealNews = !!(liveContext.news?.headlines?.length >= 2 && liveContext.news.provider !== 'polymarket_related');
     const hasEnsemble = !!(liveContext.ensemble?.shouldTrade);
     const hasRelevantData = hasOdds || hasRealNews || hasEnsemble;
-    if (!hasRelevantData) {
+    if (!hasRelevantData && calibratedEdge < 20) {
         return {
-            recommendation: { action: 'HOLD', confidence: 'low', edge: 0, kellyFraction: 0, reasoning: 'Insufficient data — need odds, real news (2+ headlines), or ensemble agreement' },
-            rawResponse: 'Skipped: no relevant external data',
+            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Insufficient data — need odds, news, ensemble, or very large edge (≥20pts). Edge: ${calibratedEdge.toFixed(1)}pts` },
+            rawResponse: 'Skipped: no relevant external data and edge too small',
         };
     }
 

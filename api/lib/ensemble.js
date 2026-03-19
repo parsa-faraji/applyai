@@ -33,13 +33,16 @@ const MODELS = [
  * @returns {object} { probability, confidence, reasoning, model }
  */
 async function queryModel(model, prompt, keys) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout per model
     try {
         let text;
 
         if (model.provider === 'anthropic') {
-            if (!keys.anthropicKey) return null;
+            if (!keys.anthropicKey) { clearTimeout(timeoutId); return null; }
             const resp = await fetch('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
+                signal: controller.signal,
                 headers: {
                     'x-api-key': keys.anthropicKey,
                     'anthropic-version': '2023-06-01',
@@ -53,15 +56,17 @@ async function queryModel(model, prompt, keys) {
             });
             if (!resp.ok) {
                 console.error(`  Ensemble [${model.label}]: Anthropic API ${resp.status}`);
+                clearTimeout(timeoutId);
                 return null;
             }
             const data = await resp.json();
             text = data.content?.[0]?.text || '';
 
         } else if (model.provider === 'openrouter') {
-            if (!keys.openrouterKey) return null;
+            if (!keys.openrouterKey) { clearTimeout(timeoutId); return null; }
             const resp = await fetch(OPENROUTER_URL, {
                 method: 'POST',
+                signal: controller.signal,
                 headers: {
                     'Authorization': `Bearer ${keys.openrouterKey}`,
                     'Content-Type': 'application/json',
@@ -76,12 +81,14 @@ async function queryModel(model, prompt, keys) {
             if (!resp.ok) {
                 const errText = await resp.text().catch(() => '');
                 console.error(`  Ensemble [${model.label}]: OpenRouter ${resp.status} — ${errText.slice(0, 100)}`);
+                clearTimeout(timeoutId);
                 return null;
             }
             const data = await resp.json();
             text = data.choices?.[0]?.message?.content || '';
         }
 
+        clearTimeout(timeoutId);
         if (!text) return null;
 
         // Parse JSON response
@@ -96,7 +103,9 @@ async function queryModel(model, prompt, keys) {
             reasoning: parsed.reasoning || '',
         };
     } catch (err) {
-        console.error(`  Ensemble [${model.label}]: ${err.message}`);
+        clearTimeout(timeoutId);
+        const msg = err.name === 'AbortError' ? 'timeout (10s)' : err.message;
+        console.error(`  Ensemble [${model.label}]: ${msg}`);
         return null;
     }
 }
@@ -183,8 +192,9 @@ ${context}
     const adjustedConfidence = avgConfidence * (1 - disagreementPenalty);
     const confidence = adjustedConfidence > 0.7 ? 'high' : adjustedConfidence > 0.4 ? 'medium' : 'low';
 
-    // Should trade: need at least 2 models and low disagreement
-    const shouldTrade = successful.length >= 2 && disagreement < 0.25;
+    // Should trade: 2+ models with low disagreement, or 1 model with high confidence
+    const shouldTrade = (successful.length >= 2 && disagreement < 0.25) ||
+        (successful.length === 1 && successful[0].confidence === 'high');
 
     return {
         consensusProbability,
