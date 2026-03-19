@@ -638,6 +638,11 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         rawProbability: rawProb,
         researchKeyFactors: research.result.keyFactors || [],
         researchConfidence: research.result.confidence || 'low',
+        // Data availability flags for edge-based confidence boosting
+        hadOdds: !!liveContext.odds?.consensus,
+        hadNews: !!(liveContext.news?.headlines?.length >= 2),
+        hadEnsemble: !!liveContext.ensemble?.shouldTrade,
+        ensembleDisagreement: liveContext.ensemble?.disagreement ?? 1,
     };
 
     return { recommendation, rawResponse: research.rawText };
@@ -647,9 +652,36 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
 
 function shouldExecute(rec, riskLevel) {
     if (!rec || rec.action === 'HOLD') return false;
+
+    const edge = rec.edge || 0;
+    const hasExternalData = rec.hadOdds || rec.hadNews || rec.hadEnsemble;
+    const ensDisagree = rec.ensembleDisagreement ?? 1;
+
+    // Edge-based confidence boosting (research: LLM self-reported confidence is
+    // poorly calibrated; calibrated edge is a much stronger signal)
+    let effectiveConfidence = rec.confidence;
+
+    // Tier 1: huge edge + ensemble agreement → high confidence
+    if (edge >= 25 && rec.hadEnsemble && ensDisagree < 0.10) {
+        effectiveConfidence = 'high';
+    }
+    // Tier 2: large edge + any external data → boost low→medium
+    else if (edge >= 20 && hasExternalData) {
+        if (effectiveConfidence === 'low') effectiveConfidence = 'medium';
+    }
+    // Tier 3: moderate edge + bookmaker odds → boost low→medium
+    else if (edge >= 15 && rec.hadOdds) {
+        if (effectiveConfidence === 'low') effectiveConfidence = 'medium';
+    }
+
+    // Disagreement veto: if ensemble models disagree strongly, revert boost
+    if (rec.hadEnsemble && ensDisagree > 0.20) {
+        effectiveConfidence = rec.confidence;
+    }
+
     const minConfidence = { conservative: 'high', moderate: 'medium', aggressive: 'low' };
     const levels = ['low', 'medium', 'high'];
-    return levels.indexOf(rec.confidence) >= levels.indexOf(minConfidence[riskLevel] || 'medium');
+    return levels.indexOf(effectiveConfidence) >= levels.indexOf(minConfidence[riskLevel] || 'medium');
 }
 
 function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSinglePct) {
