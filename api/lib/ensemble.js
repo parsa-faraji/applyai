@@ -21,7 +21,7 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // gets fed back to Claude in the research context).
 const MODELS = [
     { id: 'gpt4o', provider: 'openrouter', model: 'openai/gpt-4o', weight: 0.35, label: 'GPT-4o' },
-    { id: 'gemini', provider: 'openrouter', model: 'google/gemini-2.5-flash-preview', weight: 0.35, label: 'Gemini' },
+    { id: 'gemini', provider: 'openrouter', model: 'google/gemini-2.5-flash', weight: 0.35, label: 'Gemini' },
     { id: 'deepseek', provider: 'openrouter', model: 'deepseek/deepseek-r1', weight: 0.30, label: 'DeepSeek' },
 ];
 
