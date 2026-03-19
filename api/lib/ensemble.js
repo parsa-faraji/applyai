@@ -192,9 +192,8 @@ ${context}
     const adjustedConfidence = avgConfidence * (1 - disagreementPenalty);
     const confidence = adjustedConfidence > 0.7 ? 'high' : adjustedConfidence > 0.4 ? 'medium' : 'low';
 
-    // Should trade: 2+ models with low disagreement, or 1 model with high confidence
-    const shouldTrade = (successful.length >= 2 && disagreement < 0.25) ||
-        (successful.length === 1 && successful[0].confidence === 'high');
+    // Should trade: need at least 2 models to agree (low disagreement)
+    const shouldTrade = successful.length >= 2 && disagreement < 0.25;
 
     return {
         consensusProbability,
