@@ -6,7 +6,7 @@
 // Returns: { resolved, calibrationStats, performanceByCategory, performanceByStrategy }
 
 import { getMarket } from './lib/kalshi.js';
-import { readTrades, readDecisions } from './lib/trade-logger.js';
+import { readTrades, readDecisions, logResolution } from './lib/trade-logger.js';
 import { updateCalibration, getCalibrationStats } from './lib/calibration.js';
 
 export const config = { maxDuration: 30 };
@@ -126,6 +126,9 @@ export default async function handler(req, res) {
             report.resolved.push(resolution);
             report.newResolutions++;
             performance.resolved.add(trade.ticker);
+
+            // Persist resolution to JSONL for self-reflection context
+            try { logResolution(resolution); } catch {}
 
             // 4. Update Platt scaling calibration
             // MUST use the RAW (pre-calibration) probability, not the calibrated one.

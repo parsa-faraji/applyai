@@ -10,6 +10,7 @@ import { getOrderBook as getKalshiOrderBook, summarizeOrderBook as summarizeKals
 import { searchNews } from './lib/search.js';
 import { getAllSportsOdds, findMatchingOdds, formatOddsForPrompt } from './lib/odds.js';
 import { getSportsContext } from './lib/sports.js';
+import { buildSelfReflectionContext } from './lib/trade-logger.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -97,7 +98,7 @@ export default async function handler(req, res) {
             const exitCandidate = { tokenId: pos.tokenId, ticker: pos.ticker, exchange: pos.exchange, market: pos.market, outcome: pos.outcome, shares: pos.shares, currentPrice: livePrice, pnlPct };
 
             // Check if position is worth reviewing (significant move or nearing expiry)
-            const worthReviewing = Math.abs(pnlPct) >= 20 || (pos.endDate && ((new Date(pos.endDate) - new Date()) / 3600000) < 2);
+            const worthReviewing = Math.abs(pnlPct) >= 10 || (pos.endDate && ((new Date(pos.endDate) - new Date()) / 3600000) < 6);
 
             if (worthReviewing && anthropicKey) {
                 const triggerMsg = pnlPct <= 0
@@ -121,9 +122,9 @@ export default async function handler(req, res) {
                 if (hoursLeft > 0 && hoursLeft <= 24) {
                     updated.hoursToResolution = hoursLeft;
 
-                    // If less than 6 hours and position is losing, suggest exit
-                    // (don't hold a losing position into resolution — binary outcome risk)
-                    if (hoursLeft <= 6 && pnlPct < -5) {
+                    // Only auto-exit in extreme cases (< 1h left, down big)
+                    // Prediction markets resolve at $0 or $1 — premature exits lock in small losses
+                    if (hoursLeft <= 1 && pnlPct < -15) {
                         alerts.push({
                             type: 'expiring_soon',
                             severity: 'critical',
@@ -352,8 +353,10 @@ async function smartExitAnalysis(pos, livePrice, pnlPct, entryPrice, triggerType
         } catch {}
     }
 
-    const prompt = `You are monitoring a prediction market position. A threshold was triggered and you must decide: SELL now or HOLD.
+    const selfReflection = buildSelfReflectionContext(20);
 
+    const prompt = `You are monitoring a prediction market position. A threshold was triggered and you must decide: SELL now or HOLD.
+${selfReflection}
 ## Position
 - **Market:** ${pos.market}
 - **Side:** ${pos.outcome}

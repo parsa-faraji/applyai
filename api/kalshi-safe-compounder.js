@@ -6,7 +6,7 @@
 
 import { getMarkets, getOrderBook, summarizeOrderBook, placeOrder, normalizeMarket } from './lib/kalshi.js';
 import { searchNews } from './lib/search.js';
-import { logTrade, logDecision, categorizeMarket } from './lib/trade-logger.js';
+import { logTrade, logDecision, categorizeMarket, buildSelfReflectionContext } from './lib/trade-logger.js';
 import { getAllSportsOdds, findMatchingOdds, formatOddsForPrompt } from './lib/odds.js';
 
 export const config = { maxDuration: 60 };
@@ -224,8 +224,9 @@ export default async function handler(req, res) {
 
                     // NOTE: Do NOT show the market price to prevent anchoring bias.
                     // Claude should estimate probability independently.
+                    const selfReflection = buildSelfReflectionContext(20);
                     const claudePrompt = `You are estimating the probability of an event. Give your INDEPENDENT estimate — do NOT consider any market price.
-
+${selfReflection}
 Question: ${market.question}
 Description: ${market.description || 'No description available'}
 ${newsSnippet}${oddsContext}

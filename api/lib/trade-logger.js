@@ -17,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOG_DIR = path.join(__dirname, '..', '..', 'data');
 const TRADE_LOG = path.join(LOG_DIR, 'trades.jsonl');
 const DECISION_LOG = path.join(LOG_DIR, 'decisions.jsonl');
+const RESOLUTION_LOG = path.join(LOG_DIR, 'resolutions.jsonl');
 
 // Detect if we're on a read-only filesystem (Vercel serverless)
 let _writable = null;
@@ -88,6 +89,58 @@ export function readTrades() {
             catch { return null; }
         })
         .filter(Boolean);
+}
+
+/**
+ * Log a trade resolution (win/loss outcome)
+ */
+export function logResolution(resolution) {
+    if (!ensureDir()) return null;
+    const entry = {
+        type: 'resolution',
+        timestamp: new Date().toISOString(),
+        ...resolution,
+    };
+    fs.appendFileSync(RESOLUTION_LOG, JSON.stringify(entry) + '\n');
+    return entry;
+}
+
+/**
+ * Get recent resolved trades (for self-reflection context)
+ */
+export function getRecentResolved(limit = 20) {
+    if (!fs.existsSync(RESOLUTION_LOG)) return [];
+    const lines = fs.readFileSync(RESOLUTION_LOG, 'utf-8')
+        .split('\n')
+        .filter(Boolean);
+    return lines.slice(-limit).map(line => {
+        try { return JSON.parse(line); }
+        catch { return null; }
+    }).filter(Boolean);
+}
+
+/**
+ * Build a self-reflection context string from recent resolutions
+ */
+export function buildSelfReflectionContext(limit = 20) {
+    const resolved = getRecentResolved(limit);
+    if (resolved.length === 0) return '';
+
+    const wins = resolved.filter(r => r.won).length;
+    const losses = resolved.length - wins;
+    const totalPnl = resolved.reduce((sum, r) => sum + (r.totalPnl || 0), 0);
+
+    let ctx = `\n## Your Recent Track Record (last ${resolved.length} resolved trades)\n`;
+    ctx += `**Overall: ${wins}W / ${losses}L (${(wins / resolved.length * 100).toFixed(0)}% win rate) | P&L: $${totalPnl.toFixed(2)}**\n\n`;
+
+    for (const r of resolved) {
+        const status = r.won ? 'WON' : 'LOST';
+        const pnl = r.totalPnl >= 0 ? `+$${r.totalPnl.toFixed(2)}` : `-$${Math.abs(r.totalPnl).toFixed(2)}`;
+        ctx += `- ${status}: ${r.market || r.ticker} | ${r.side?.toUpperCase()} @ ${((r.entryPrice || 0) * 100).toFixed(0)}¢ | Edge: ${r.edge != null ? r.edge.toFixed(1) + 'pts' : '?'} | ${r.category || 'other'} | ${pnl}\n`;
+    }
+
+    ctx += `\nReflect on these outcomes. Where were you overconfident? Which categories performed worst? Adjust your estimates accordingly.\n`;
+    return ctx;
 }
 
 /**

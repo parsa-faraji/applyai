@@ -8,7 +8,7 @@ import { getEconomicContext } from './lib/fred.js';
 import { getWeatherContext } from './lib/noaa.js';
 import { runEnsemble, formatEnsembleForPrompt } from './lib/ensemble.js';
 import { getSportsContext } from './lib/sports.js';
-import { logTrade, logDecision, categorizeMarket } from './lib/trade-logger.js';
+import { logTrade, logDecision, categorizeMarket, buildSelfReflectionContext } from './lib/trade-logger.js';
 import { calibrateWithContext } from './lib/calibration.js';
 
 export const config = { maxDuration: 60 };
@@ -34,6 +34,7 @@ export default async function handler(req, res) {
         recentlyExited = [],        // tickers/event_tickers exited recently (cooldown)
         sessionTradedTickers = [],  // tickers already traded this session (no duplicates)
         maxTradesPerCycle = 2,   // cap trades per cycle
+        blockedCategories = [],  // categories blocked by meta-agent
     } = req.body;
 
     const anthropicKey = req.headers['x-anthropic-key'] || process.env.ANTHROPIC_API_KEY;
@@ -155,6 +156,7 @@ export default async function handler(req, res) {
         const recentlyExitedSet = new Set(recentlyExited);
         const existingEventSet = new Set(existingEventTickers);
         const sessionTradedSet = new Set(sessionTradedTickers);
+        const blockedCategorySet = new Set(blockedCategories);
 
         // Game-level correlation guard: extract game keys from existing positions
         // Different bet types on the same game (spread, totals, moneyline) share a
@@ -191,6 +193,19 @@ export default async function handler(req, res) {
             // (e.g., moneyline + spread + totals all for Portland at Indiana)
             const gameKey = extractGameKey(rawMarket.ticker);
             if (gameKey && existingGameKeys.has(gameKey)) continue;
+
+            // Meta-agent category block: skip categories with negative 30-day P&L
+            const earlyCategory = categorizeMarket(rawMarket.ticker, rawMarket.title || '');
+            if (blockedCategorySet.size > 0 && blockedCategorySet.has(earlyCategory)) {
+                report.analyses.push({
+                    market: rawMarket.title || rawMarket.ticker,
+                    ticker: rawMarket.ticker,
+                    category: earlyCategory,
+                    recommendation: { action: 'HOLD', reasoning: `Category "${earlyCategory}" blocked by meta-agent (negative 30d P&L)` },
+                    skipped: 'meta-agent category block',
+                });
+                continue;
+            }
 
             const market = normalizeMarket(rawMarket);
 
@@ -421,9 +436,10 @@ ${news.headlines.map((h, i) => `- ${h}${news.snippets?.[i] ? ': ' + news.snippet
 // Stage 1: Independent research estimate (no market price to prevent anchoring)
 async function runResearchStage(market, apiKey, liveContext) {
     const researchContext = buildResearchContext(liveContext);
+    const selfReflection = buildSelfReflectionContext(20);
 
     const prompt = `You are a calibrated research analyst estimating event probabilities. Based ONLY on the evidence below, estimate the probability. DO NOT consider any market price.
-
+${selfReflection}
 Question: ${market.question}
 Description: ${market.description || 'N/A'}
 ${researchContext}
@@ -590,6 +606,11 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     researchProb = Math.max(0.01, Math.min(0.99, researchProb));
     const calibratedEdge = Math.abs(researchProb * 100 - yesPrice);
 
+    // ── MID-RANGE AVOIDANCE: 40-60¢ = max uncertainty + peak fees = zero structural edge ──
+    // CEPR research on 300K+ Kalshi contracts confirms this dead zone
+    const isMidRange = yesPrice >= 40 && yesPrice <= 60;
+    const effectiveMinEdge = isMidRange ? Math.max(12, 15) : 12; // 15pt min for mid-range
+
     // ── INFORMATION QUALITY GATE: Require RELEVANT external data ──
     // Bookmaker odds are the gold standard (sharp money). News with 2+ headlines is decent.
     // ESPN scores alone are weak signal. FRED/NOAA data is only useful for matching markets.
@@ -604,8 +625,8 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         };
     }
 
-    // Require minimum edge: 10pts with odds/ensemble, 12pts without (was 8)
-    const minEdge = liveContext.odds?.consensus ? 10 : 12;
+    // Require minimum edge: 10pts with odds/ensemble, 12pts without, 15pts for mid-range
+    const minEdge = isMidRange ? effectiveMinEdge : (liveContext.odds?.consensus ? 10 : 12);
     if (calibratedEdge < minEdge) {
         return {
             recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Calibrated edge only ${calibratedEdge.toFixed(1)}pts (need ≥${minEdge}pts). Raw: ${Math.abs(rawProb * 100 - yesPrice).toFixed(1)}pts` },
@@ -665,8 +686,9 @@ function shouldExecute(rec, riskLevel) {
     if (edge >= 25 && rec.hadEnsemble && ensDisagree < 0.10) {
         effectiveConfidence = 'high';
     }
-    // Tier 2: large edge + any external data → boost low→medium
-    else if (edge >= 20 && hasExternalData) {
+    // Tier 2: large edge + strong external data → boost low→medium
+    // Require bookmaker odds or low-disagreement ensemble (not just news headlines)
+    else if (edge >= 20 && (rec.hadOdds || (rec.hadEnsemble && ensDisagree < 0.15))) {
         if (effectiveConfidence === 'low') effectiveConfidence = 'medium';
     }
     // Tier 3: moderate edge + bookmaker odds → boost low→medium

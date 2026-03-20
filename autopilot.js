@@ -17,6 +17,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readMetaConfig } from './api/lib/meta-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -92,6 +93,17 @@ async function callEndpoint(name, path, body = {}) {
 
 async function runCycle() {
     log('═══ Autopilot cycle starting ═══');
+
+    // Read meta-agent config for dynamic strategy adjustments
+    let metaConfig = null;
+    try {
+        metaConfig = readMetaConfig();
+        if (metaConfig.blockedCategories?.length > 0) {
+            log(`  Meta-agent: blocked categories: ${metaConfig.blockedCategories.join(', ')}`);
+        }
+    } catch {
+        log('  Meta-agent: config not available (using defaults)');
+    }
 
     // 1. Sync positions
     const sync = await callEndpoint('Sync', '/api/kalshi-sync');
@@ -226,8 +238,9 @@ async function runCycle() {
 
     // 2. Safe Compounder
     log('  Running Safe Compounder...');
+    const safeBudget = metaConfig?.strategyBudgets?.['safe-compounder'] ?? 50;
     const safe = await callEndpoint('Safe Compounder', '/api/kalshi-safe-compounder', {
-        budget: 50, maxPerTrade: 10, dryRun: false, marketLimit: 20,
+        budget: safeBudget, maxPerTrade: 10, dryRun: false, marketLimit: 20,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
     });
     if (safe) {
@@ -268,13 +281,15 @@ async function runCycle() {
     for (const [key, ts] of stats.recentExits) {
         if (Date.now() - ts > COOLDOWN_MS) stats.recentExits.delete(key);
     }
+    const botBudget = metaConfig?.strategyBudgets?.['auto-trade'] ?? 50;
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
-        budget: 50, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
+        budget: botBudget, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
         existingEventTickers: (sync?.positions || []).map(p => p.event_ticker).filter(Boolean),
         recentlyExited: [...stats.recentExits.keys()],
         sessionTradedTickers: [...stats.sessionTrades],
         maxTradesPerCycle: 2,
+        blockedCategories: metaConfig?.blockedCategories || [],
     });
     if (bot) {
         stats.totalTrades += bot.tradesExecuted || 0;
