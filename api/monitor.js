@@ -430,8 +430,14 @@ ${context}
 
     try {
         const json = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
-        return { action: json.action === 'HOLD' ? 'HOLD' : 'SELL', reasoning: json.reasoning || 'No reasoning' };
+        // Only sell when Claude explicitly says "SELL" — default to HOLD.
+        // Premature sells in prediction markets lock in losses on positions
+        // that might still resolve profitably.
+        return {
+            action: json.action === 'SELL' ? 'SELL' : 'HOLD',
+            reasoning: json.reasoning || 'No reasoning provided',
+        };
     } catch {
-        return { action: 'SELL', reasoning: 'Parse error — defaulting to sell' };
+        return { action: 'HOLD', reasoning: 'Parse error — holding by default (prediction markets resolve at $0 or $1)' };
     }
 }
