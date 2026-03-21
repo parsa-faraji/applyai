@@ -28,13 +28,30 @@ const MIME = {
     '.ico': 'image/x-icon',
 };
 
+/**
+ * Prevent path-traversal attacks by resolving the path and ensuring
+ * it stays within the project root. Returns null if the path escapes.
+ * @param {string} unsafePath - URL pathname (e.g. "/api/../../../etc/passwd")
+ * @param {string} suffix - optional suffix to append (e.g. ".js")
+ * @returns {string|null} resolved absolute path, or null if it escapes __dirname
+ */
+function safePath(unsafePath, suffix = '') {
+    const resolved = path.resolve(__dirname, '.' + unsafePath + suffix);
+    if (!resolved.startsWith(__dirname + path.sep) && resolved !== __dirname) {
+        return null;
+    }
+    return resolved;
+}
+
+const MAX_BODY_SIZE = 1024 * 1024; // 1 MB
+
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
     // API routes — run handler in a fresh child process (no module cache)
     if (url.pathname.startsWith('/api/')) {
-        const handlerPath = path.join(__dirname, url.pathname + '.js');
-        if (!fs.existsSync(handlerPath)) {
+        const handlerPath = safePath(url.pathname, '.js');
+        if (!handlerPath || !fs.existsSync(handlerPath)) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'API route not found' }));
         }
@@ -57,24 +74,29 @@ const server = http.createServer(async (req, res) => {
             console.error(`API error [${url.pathname}]:`, err.message);
             if (!res.headersSent) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message }));
+                res.end(JSON.stringify({ error: 'Internal server error' }));
             }
         }
         return;
     }
 
-    // Static files
-    let filePath = path.join(__dirname, url.pathname === '/' ? 'index.html' : url.pathname);
+    // Static files — resolve and verify path stays inside project root
+    const filePath = safePath(url.pathname === '/' ? '/index.html' : url.pathname);
 
-    if (!fs.existsSync(filePath)) {
+    if (!filePath || !fs.existsSync(filePath)) {
         res.writeHead(404);
         return res.end('Not found');
     }
 
+    // Only serve known file types; reject dotfiles and other sensitive paths
     const ext = path.extname(filePath);
-    const contentType = MIME[ext] || 'application/octet-stream';
+    if (!MIME[ext]) {
+        res.writeHead(403);
+        return res.end('Forbidden');
+    }
+
     const content = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': contentType });
+    res.writeHead(200, { 'Content-Type': MIME[ext] });
     res.end(content);
 });
 
@@ -119,13 +141,22 @@ function runInWorker(handlerPath, reqData) {
 }
 
 function parseBody(req) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         let body = '';
-        req.on('data', chunk => body += chunk);
+        let size = 0;
+        req.on('data', chunk => {
+            size += chunk.length;
+            if (size > MAX_BODY_SIZE) {
+                req.destroy();
+                return reject(new Error('Request body too large'));
+            }
+            body += chunk;
+        });
         req.on('end', () => {
             try { resolve(JSON.parse(body)); }
             catch { resolve({}); }
         });
+        req.on('error', reject);
     });
 }
 
