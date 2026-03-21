@@ -5,7 +5,8 @@
   "description": "AI-powered prediction market trading bot — Claude analyzes Kalshi + Polymarket markets and trades for you",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "node --watch server.js",
+    "bot": "node autopilot.js",
     "deploy": "vercel --prod",
     "deploy:preview": "vercel"
   },
