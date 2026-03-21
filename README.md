@@ -1,3 +1,5 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 # PredictBot — AI-Powered Prediction Market Trading
 
 A web app that uses Claude to analyze Polymarket prediction markets and execute trades on your behalf.
