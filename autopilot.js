@@ -19,6 +19,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { readMetaConfig } from './api/lib/meta-config.js';
 import { logCycleAction } from './api/lib/trade-logger.js';
+import { runMetaCycle } from './meta-agent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -436,6 +437,17 @@ async function runCycle() {
                     log(`  ⚠ EDGE DECAY: ${strat} has ${(s.winRate * 100).toFixed(0)}% win rate over ${s.trades} trades — consider pausing`);
                 }
             }
+        }
+    }
+
+    // 9. Meta-agent: compute stats, update strategy modes/budgets
+    // Runs after learning so it has the latest resolution data.
+    // Pure local math — no API calls, runs in milliseconds.
+    if (stats.cyclesRun % 3 === 0) {
+        try {
+            runMetaCycle();
+        } catch (err) {
+            log(`  Meta-agent error: ${err.message}`);
         }
     }
 

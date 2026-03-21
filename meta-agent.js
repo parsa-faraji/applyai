@@ -189,9 +189,9 @@ function computeStrategyModes(stratStats30d, prevModes) {
     return modes;
 }
 
-// ── Main cycle ──
+// ── Main cycle (exported for use by autopilot.js) ──
 
-function runMetaCycle() {
+export function runMetaCycle() {
     log('═══ Meta-agent cycle starting ═══');
 
     const prevConfig = readMetaConfig();
@@ -376,18 +376,20 @@ function runMetaCycle() {
     log('═══ Meta-agent cycle complete ═══\n');
 }
 
-// ── Kill switch ──
-if (process.env.META_AGENT_ENABLED === 'false') {
-    log('META_AGENT_ENABLED=false — exiting');
-    process.exit(0);
+// ── Standalone mode: only runs when executed directly (not when imported) ──
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isMainModule) {
+    if (process.env.META_AGENT_ENABLED === 'false') {
+        log('META_AGENT_ENABLED=false — exiting');
+        process.exit(0);
+    }
+
+    log('Meta-agent starting (standalone mode)...');
+    log(`Mode: ${DRY_RUN ? 'DRY RUN (no config writes)' : 'LIVE'}`);
+    log(`Interval: ${INTERVAL / 60000} minutes`);
+    log('');
+
+    runMetaCycle();
+    setInterval(runMetaCycle, INTERVAL);
 }
-
-// Start
-log('Meta-agent starting...');
-log(`Mode: ${DRY_RUN ? 'DRY RUN (no config writes)' : 'LIVE'}`);
-log(`Interval: ${INTERVAL / 60000} minutes`);
-log('');
-
-// Run immediately, then on interval
-runMetaCycle();
-setInterval(runMetaCycle, INTERVAL);
