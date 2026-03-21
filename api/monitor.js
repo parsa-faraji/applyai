@@ -10,7 +10,7 @@ import { getOrderBook as getKalshiOrderBook, summarizeOrderBook as summarizeKals
 import { searchNews } from './lib/search.js';
 import { getAllSportsOdds, findMatchingOdds, formatOddsForPrompt } from './lib/odds.js';
 import { getSportsContext } from './lib/sports.js';
-import { buildSelfReflectionContext } from './lib/trade-logger.js';
+import { buildSelfReflectionContext, logMonitorDecision } from './lib/trade-logger.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -107,6 +107,25 @@ export default async function handler(req, res) {
                 const triggerType = pnlPct <= -20 ? 'losing' : pnlPct >= 20 ? 'winning' : 'expiring';
 
                 const decision = await smartExitAnalysis(pos, livePrice, pnlPct, entryPrice, triggerType, triggerMsg, anthropicKey, braveKey, oddsKey).catch(() => ({ action: 'HOLD', reasoning: 'Analysis failed — holding by default' }));
+
+                // Persist every monitor decision for audit trail
+                try {
+                    logMonitorDecision({
+                        ticker: pos.ticker,
+                        market: pos.market,
+                        outcome: pos.outcome,
+                        strategy: pos.strategy || 'unknown',
+                        entryPrice,
+                        livePrice,
+                        pnlPct,
+                        triggerType,
+                        triggerMsg,
+                        decision: decision.action,
+                        reasoning: decision.reasoning,
+                        endDate: pos.endDate || null,
+                        hoursToResolution: pos.endDate ? (new Date(pos.endDate) - new Date()) / 3600000 : null,
+                    });
+                } catch {}
 
                 if (decision.action === 'SELL') {
                     alerts.push({ type: 'smart_exit', severity: 'critical', market: pos.market, message: `SMART EXIT: ${triggerMsg}. Claude says: ${decision.reasoning}`, tokenId: pos.tokenId });

@@ -18,6 +18,8 @@ const LOG_DIR = path.join(__dirname, '..', '..', 'data');
 const TRADE_LOG = path.join(LOG_DIR, 'trades.jsonl');
 const DECISION_LOG = path.join(LOG_DIR, 'decisions.jsonl');
 const RESOLUTION_LOG = path.join(LOG_DIR, 'resolutions.jsonl');
+const MONITOR_LOG = path.join(LOG_DIR, 'monitor-decisions.jsonl');
+const CYCLE_LOG = path.join(LOG_DIR, 'cycle-actions.jsonl');
 
 // Detect if we're on a read-only filesystem (Vercel serverless)
 let _writable = null;
@@ -141,6 +143,58 @@ export function buildSelfReflectionContext(limit = 20) {
 
     ctx += `\nReflect on these outcomes. Where were you overconfident? Which categories performed worst? Adjust your estimates accordingly.\n`;
     return ctx;
+}
+
+/**
+ * Log a monitor decision (HOLD/SELL + reasoning)
+ */
+export function logMonitorDecision(decision) {
+    if (!ensureDir()) return null;
+    const entry = {
+        type: 'monitor_decision',
+        timestamp: new Date().toISOString(),
+        ...decision,
+    };
+    fs.appendFileSync(MONITOR_LOG, JSON.stringify(entry) + '\n');
+    return entry;
+}
+
+/**
+ * Log a cycle action (exit, buy, alert — anything the autopilot does)
+ */
+export function logCycleAction(action) {
+    if (!ensureDir()) return null;
+    const entry = {
+        type: 'cycle_action',
+        timestamp: new Date().toISOString(),
+        ...action,
+    };
+    fs.appendFileSync(CYCLE_LOG, JSON.stringify(entry) + '\n');
+    return entry;
+}
+
+/**
+ * Read monitor decisions
+ */
+export function readMonitorDecisions() {
+    if (!fs.existsSync(MONITOR_LOG)) return [];
+    return fs.readFileSync(MONITOR_LOG, 'utf-8')
+        .split('\n')
+        .filter(Boolean)
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean);
+}
+
+/**
+ * Read cycle actions
+ */
+export function readCycleActions() {
+    if (!fs.existsSync(CYCLE_LOG)) return [];
+    return fs.readFileSync(CYCLE_LOG, 'utf-8')
+        .split('\n')
+        .filter(Boolean)
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean);
 }
 
 /**

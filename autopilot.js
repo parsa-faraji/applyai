@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readMetaConfig } from './api/lib/meta-config.js';
+import { logCycleAction } from './api/lib/trade-logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -247,6 +248,7 @@ async function runCycle() {
         log(`  Safe: scanned ${safe.marketsScanned || '?'}, ${safe.candidates || 0} candidates, ${safe.tradesExecuted || 0} trades`);
         for (const t of (safe.trades || [])) {
             log(`    → NO ${t.market?.slice(0, 50)} — ${t.count} contracts @ ${t.price}¢`);
+            try { logCycleAction({ action: 'buy', strategy: 'safe-compounder', ticker: t.ticker, side: 'no', count: t.count, price: t.price, market: t.market, cost: t.cost, edge: t.edge, cycle: stats.cyclesRun }); } catch {}
         }
     }
 
@@ -300,6 +302,7 @@ async function runCycle() {
         log(`  Bot${modeTag}: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
         for (const t of (bot.trades || [])) {
             log(`    →${modeTag} ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
+            try { logCycleAction({ action: 'buy', strategy: 'auto-trade', paper: autoTradeMode !== 'live', ticker: t.ticker, side: t.side, count: t.count || t.shares, price: t.price, market: t.market, cost: t.cost || t.amount, edge: t.edge, cycle: stats.cyclesRun }); } catch {}
         }
         for (const a of (bot.analyses || [])) {
             if (a.recommendation?.action !== 'HOLD') {
@@ -387,8 +390,11 @@ async function runCycle() {
                             const exitedPos = positions.find(p => p.ticker === exit.ticker);
                             if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
                             log(`    Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
+                            // Persist exit action for audit trail
+                            try { logCycleAction({ action: 'exit', ticker: exit.ticker, side, shares: Math.abs(shares), price: sellResult.trade.price, reason: exit.reason, pnlPct: exit.pnlPct, market: pos?.market, cycle: stats.cyclesRun }); } catch {}
                         } else {
                             log(`    Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
+                            try { logCycleAction({ action: 'exit_failed', ticker: exit.ticker, error: sellResult?.error || 'unknown', cycle: stats.cyclesRun }); } catch {}
                         }
                     } catch (err) {
                         log(`    Sell error for ${exit.ticker}: ${err.message}`);
@@ -398,8 +404,8 @@ async function runCycle() {
         }
     }
 
-    // 8. Learning: check resolved markets every 10 cycles (~100 min)
-    if (stats.cyclesRun % 10 === 0) {
+    // 8. Learning: check resolved markets every 3 cycles (~60 min)
+    if (stats.cyclesRun % 3 === 0) {
         log('  Running Learning Check...');
         const learn = await callEndpoint('Learning', '/api/kalshi-learn', {});
         if (learn) {
