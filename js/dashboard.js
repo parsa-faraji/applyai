@@ -58,9 +58,9 @@
         // Summary cards
         setText('dTodayTrades', `${d.today.buys}${d.today.paperBuys ? ` (${d.today.paperBuys} paper)` : ''}`);
         setText('dTodayPnl', formatPnl(d.today.pnl));
-        setText('dWinRate', d.allTime.resolutions > 0 ? `${(d.allTime.winRate * 100).toFixed(0)}%` : 'N/A');
-        setText('dAllPnl', formatPnl(d.allTime.pnl));
-        setText('dResolutions', `${d.allTime.resolutions} (${d.allTime.wins}W/${d.allTime.resolutions - d.allTime.wins}L)`);
+        setText('dWinRate', d.allTime.resolutions > 0 ? `${(d.allTime.winRate * 100).toFixed(0)}%` : '—');
+        setText('dAllPnl', d.allTime.resolutions > 0 ? formatPnl(d.allTime.pnl) : '—');
+        setText('dResolutions', d.allTime.resolutions > 0 ? `${d.allTime.resolutions} (${d.allTime.wins}W/${d.allTime.resolutions - d.allTime.wins}L)` : '0');
         setText('dCalibration', `${d.calibration.k?.toFixed(3) || '0.650'} (${d.calibration.updates || 0} updates)`);
 
         colorPnl('dTodayPnl', d.today.pnl);
@@ -265,9 +265,11 @@
                     statusHtml = '<span class="dash-tag tag-open">OPEN</span>';
                 }
 
-                let resultHtml = '--';
+                let resultHtml;
                 if (t.status === 'resolved') {
                     resultHtml = `<span class="${t.pnl >= 0 ? 'clr-green' : 'clr-red'}">${formatPnl(t.pnl)}</span>`;
+                } else {
+                    resultHtml = '<span class="dash-pending">Pending</span>';
                 }
 
                 return `<tr>
