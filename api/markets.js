@@ -19,7 +19,13 @@ export default async function handler(req, res) {
             tag,
             slug,
             id,
-        } = req.query;
+        } = req.query || {};
+
+        // Validate numeric query params to prevent injection
+        const parsedLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+        const parsedOffset = Math.max(0, parseInt(offset, 10) || 0);
+        const allowedOrders = ['volume24hr', 'volume', 'liquidity', 'startDate', 'endDate'];
+        const parsedOrder = allowedOrders.includes(order) ? order : 'volume24hr';
 
         // If requesting a single market by slug or id
         if (slug) {
@@ -38,13 +44,13 @@ export default async function handler(req, res) {
             return res.status(200).json(data);
         }
 
-        // Build query for listing markets
+        // Build query for listing markets (using validated values)
         const params = new URLSearchParams({
-            limit,
-            offset,
-            order,
-            ascending,
-            closed,
+            limit: parsedLimit.toString(),
+            offset: parsedOffset.toString(),
+            order: parsedOrder,
+            ascending: ascending === 'true' ? 'true' : 'false',
+            closed: closed === 'true' ? 'true' : 'false',
             active: 'true',
         });
 

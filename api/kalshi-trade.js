@@ -11,18 +11,35 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { ticker, side, action, count, price, maxCost } = req.body;
+    const { ticker, side, action, count, price, maxCost } = req.body || {};
 
-    if (!ticker || !side || !action) {
-        return res.status(400).json({ error: 'Missing required: ticker, side (yes/no), action (buy/sell)' });
+    // --- Input validation ---
+    if (!ticker || typeof ticker !== 'string') {
+        return res.status(400).json({ error: 'Missing or invalid ticker (must be a string)' });
     }
 
-    if (!count || count <= 0) {
-        return res.status(400).json({ error: 'Count (number of contracts) must be > 0' });
+    if (!side || !['yes', 'no'].includes(side.toLowerCase())) {
+        return res.status(400).json({ error: 'side must be "yes" or "no"' });
+    }
+
+    if (!action || !['buy', 'sell'].includes(action.toLowerCase())) {
+        return res.status(400).json({ error: 'action must be "buy" or "sell"' });
+    }
+
+    if (!count || typeof count !== 'number' || !isFinite(count) || count <= 0) {
+        return res.status(400).json({ error: 'Count (number of contracts) must be a positive number' });
     }
 
     if (count > 1000) {
         return res.status(400).json({ error: 'Max 1000 contracts per order' });
+    }
+
+    if (price !== undefined && (typeof price !== 'number' || !isFinite(price) || price < 1 || price > 99)) {
+        return res.status(400).json({ error: 'price must be between 1 and 99 (cents)' });
+    }
+
+    if (maxCost !== undefined && (typeof maxCost !== 'number' || !isFinite(maxCost) || maxCost < 0)) {
+        return res.status(400).json({ error: 'maxCost must be a non-negative number' });
     }
 
     const apiKeyId = req.headers['x-kalshi-key-id'] || process.env.KALSHI_API_KEY_ID;

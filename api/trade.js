@@ -12,10 +12,26 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { tokenId, side, amount, price, negRisk, shares } = req.body;
+    const { tokenId, side, amount, price, negRisk, shares } = req.body || {};
 
-    if (!tokenId || !side) {
-        return res.status(400).json({ error: 'Missing required fields: tokenId, side' });
+    // --- Input validation ---
+    if (!tokenId || typeof tokenId !== 'string') {
+        return res.status(400).json({ error: 'Missing or invalid tokenId (must be a string)' });
+    }
+
+    if (!side || !['BUY', 'SELL'].includes(side)) {
+        return res.status(400).json({ error: 'side must be "BUY" or "SELL"' });
+    }
+
+    // Validate numeric fields
+    if (amount !== undefined && (typeof amount !== 'number' || !isFinite(amount))) {
+        return res.status(400).json({ error: 'amount must be a finite number' });
+    }
+    if (price !== undefined && (typeof price !== 'number' || !isFinite(price) || price < 0 || price > 1)) {
+        return res.status(400).json({ error: 'price must be a number between 0 and 1' });
+    }
+    if (shares !== undefined && (typeof shares !== 'number' || !isFinite(shares) || shares < 0)) {
+        return res.status(400).json({ error: 'shares must be a non-negative number' });
     }
 
     // For SELL, we need shares; for BUY, we need amount
