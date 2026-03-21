@@ -13,6 +13,7 @@
         if (nowActive && !isActive) {
             isActive = true;
             fetchDashboard();
+            if (pollInterval) clearInterval(pollInterval);
             pollInterval = setInterval(fetchDashboard, 30000);
         } else if (!nowActive && isActive) {
             isActive = false;
@@ -20,10 +21,17 @@
         }
     });
 
-    // Also trigger on nav clicks
     document.addEventListener('DOMContentLoaded', () => {
         const el = document.getElementById('dashboardView');
-        if (el) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+        if (el) {
+            observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+            // Auto-start if dashboard is the default active tab
+            if (el.classList.contains('active')) {
+                isActive = true;
+                fetchDashboard();
+                pollInterval = setInterval(fetchDashboard, 30000);
+            }
+        }
     });
 
     async function fetchDashboard() {
@@ -38,6 +46,13 @@
     }
 
     function render(d) {
+        // Status
+        const statusEl = document.getElementById('dashStatus');
+        if (statusEl) {
+            const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            statusEl.textContent = `Last updated ${now} \u2022 ${d.allTime.cycleActions} actions logged`;
+        }
+
         // Summary cards
         setText('dTodayTrades', `${d.today.buys}${d.today.paperBuys ? ` (${d.today.paperBuys} paper)` : ''}`);
         setText('dTodayPnl', formatPnl(d.today.pnl));

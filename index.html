@@ -17,8 +17,8 @@
                 <span class="logo-text">PredictBot</span>
             </div>
             <div class="nav-links">
-                <a href="#" class="nav-link" data-view="dashboard">Dashboard</a>
-                <a href="#" class="nav-link active" data-view="markets">Markets</a>
+                <a href="#" class="nav-link active" data-view="dashboard">Dashboard</a>
+                <a href="#" class="nav-link" data-view="markets">Markets</a>
                 <a href="#" class="nav-link" data-view="portfolio">Portfolio</a>
                 <a href="#" class="nav-link" data-view="settings">Settings</a>
             </div>
@@ -32,33 +32,63 @@
     <!-- Main Content -->
     <main class="main-content">
         <!-- Dashboard View -->
-        <section id="dashboardView" class="view">
+        <section id="dashboardView" class="view active">
             <div class="dashboard-layout">
+                <!-- Header -->
+                <div class="dash-header">
+                    <div class="dash-header-left">
+                        <h1 class="dash-title">Autopilot Dashboard</h1>
+                        <span class="dash-subtitle" id="dashStatus">Connecting...</span>
+                    </div>
+                    <div class="dash-header-right">
+                        <span class="dash-live-dot"></span>
+                        <span class="dash-live-text">Auto-refresh 30s</span>
+                    </div>
+                </div>
+
                 <!-- Top: Summary Cards -->
                 <div class="dash-summary" id="dashSummary">
-                    <div class="dash-card">
-                        <div class="dash-card-label">Today's Trades</div>
-                        <div class="dash-card-value" id="dTodayTrades">--</div>
+                    <div class="dash-card dash-card-accent-blue">
+                        <div class="dash-card-icon">&#9654;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">Today's Trades</div>
+                            <div class="dash-card-value" id="dTodayTrades">--</div>
+                        </div>
                     </div>
-                    <div class="dash-card">
-                        <div class="dash-card-label">Today's P&L</div>
-                        <div class="dash-card-value" id="dTodayPnl">--</div>
+                    <div class="dash-card dash-card-accent-green">
+                        <div class="dash-card-icon">&#9650;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">Today's P&L</div>
+                            <div class="dash-card-value" id="dTodayPnl">--</div>
+                        </div>
                     </div>
-                    <div class="dash-card">
-                        <div class="dash-card-label">All-Time Win Rate</div>
-                        <div class="dash-card-value" id="dWinRate">--</div>
+                    <div class="dash-card dash-card-accent-purple">
+                        <div class="dash-card-icon">&#9673;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">Win Rate</div>
+                            <div class="dash-card-value" id="dWinRate">--</div>
+                        </div>
                     </div>
-                    <div class="dash-card">
-                        <div class="dash-card-label">All-Time P&L</div>
-                        <div class="dash-card-value" id="dAllPnl">--</div>
+                    <div class="dash-card dash-card-accent-gold">
+                        <div class="dash-card-icon">&#9733;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">All-Time P&L</div>
+                            <div class="dash-card-value" id="dAllPnl">--</div>
+                        </div>
                     </div>
-                    <div class="dash-card">
-                        <div class="dash-card-label">Resolutions</div>
-                        <div class="dash-card-value" id="dResolutions">--</div>
+                    <div class="dash-card dash-card-accent-teal">
+                        <div class="dash-card-icon">&#10003;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">Resolutions</div>
+                            <div class="dash-card-value" id="dResolutions">--</div>
+                        </div>
                     </div>
-                    <div class="dash-card">
-                        <div class="dash-card-label">Calibration (k)</div>
-                        <div class="dash-card-value" id="dCalibration">--</div>
+                    <div class="dash-card dash-card-accent-indigo">
+                        <div class="dash-card-icon">&#9881;</div>
+                        <div class="dash-card-body">
+                            <div class="dash-card-label">Calibration</div>
+                            <div class="dash-card-value" id="dCalibration">--</div>
+                        </div>
                     </div>
                 </div>
 
@@ -67,7 +97,11 @@
                     <div class="panel dash-panel">
                         <div class="panel-header"><h2>Live Activity</h2></div>
                         <div id="dashActivity" class="dash-feed">
-                            <div class="empty-state small"><p>Loading...</p></div>
+                            <div class="dash-empty">
+                                <div class="dash-empty-icon">&#9202;</div>
+                                <p>Waiting for autopilot cycles...</p>
+                                <p class="dash-empty-hint">Activity will appear here as the bot trades</p>
+                            </div>
                         </div>
                     </div>
 
@@ -77,7 +111,10 @@
                         <div class="panel dash-panel">
                             <div class="panel-header"><h2>Strategy Performance</h2></div>
                             <div id="dashStrategies" class="dash-table-wrap">
-                                <div class="empty-state small"><p>No resolution data yet</p></div>
+                                <div class="dash-empty">
+                                    <p>Waiting for trade resolutions...</p>
+                                    <p class="dash-empty-hint">Stats populate as markets settle</p>
+                                </div>
                             </div>
                         </div>
 
@@ -85,7 +122,9 @@
                         <div class="panel dash-panel">
                             <div class="panel-header"><h2>Meta-Agent</h2></div>
                             <div id="dashMeta" class="dash-meta-content">
-                                <div class="empty-state small"><p>Loading...</p></div>
+                                <div class="dash-empty">
+                                    <p>Meta-agent activates after first resolutions</p>
+                                </div>
                             </div>
                         </div>
 
@@ -93,7 +132,9 @@
                         <div class="panel dash-panel">
                             <div class="panel-header"><h2>Monitor Decisions</h2></div>
                             <div id="dashMonitor" class="dash-feed dash-feed-sm">
-                                <div class="empty-state small"><p>No monitor data yet</p></div>
+                                <div class="dash-empty">
+                                    <p>Position monitoring decisions appear here</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -102,7 +143,7 @@
         </section>
 
         <!-- Markets View -->
-        <section id="marketsView" class="view active">
+        <section id="marketsView" class="view">
             <div class="markets-layout">
                 <!-- Left Panel: Markets List -->
                 <div class="panel markets-panel">
