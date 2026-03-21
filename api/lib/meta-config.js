@@ -18,9 +18,13 @@ const DEFAULT_CONFIG = {
     lastUpdated: null,
     blockedCategories: [],
     strategyBudgets: { 'safe-compounder': 50, 'auto-trade': 50 },
+    strategyModes: { 'safe-compounder': 'live', 'auto-trade': 'paper' },
     edgeDecayAlerts: [],
     selfReflectionContext: '',
     performanceSnapshot: {},
+    signalStats: {},
+    edgeBuckets: {},
+    empiricalKelly: {},
 };
 
 /**

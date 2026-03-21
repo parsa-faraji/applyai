@@ -377,8 +377,17 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence"}`;
                     edge,
                 });
 
-                // Log trade persistently
+                // Enrich trade with full data source flags for empirical tracking
                 trade.category = category;
+                trade.hadNews = !!(newsContext?.headlines?.length);
+                trade.hadEnsemble = false;
+                trade.hadSports = false;
+                trade.hadEconomic = false;
+                trade.hadWeather = false;
+                trade.rawProbability = trueYesProb;
+                trade.marketPrice = yesPriceDollars;
+                trade.estimated_edge = edge;
+                trade.apiCost = usedBookmakerDirectly ? 0 : 0.10;
                 if (isSportsMarket) {
                     trade.hadOdds = true;
                     trade.bookmakerNoProb = bookmakerNoProb != null ? parseFloat(bookmakerNoProb.toFixed(3)) : null;

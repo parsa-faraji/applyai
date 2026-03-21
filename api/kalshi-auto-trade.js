@@ -334,13 +334,22 @@ export default async function handler(req, res) {
                             expirationMinutes: 20, // expire stale orders (same as safe-compounder)
                         });
 
-                        // Attach reasoning to trade record
+                        // Attach full context to trade record for empirical tracking
                         trade.reasoning = rec.reasoning;
                         trade.confidence = rec.confidence;
                         trade.edge = rec.edge;
+                        trade.estimated_edge = rec.edge;
                         trade.rawProbability = rec.rawProbability || null;
+                        trade.calibratedProbability = rec.researchProbability || null;
+                        trade.marketPrice = parseFloat(rawMarket.last_price_dollars) || null;
                         trade.hadOdds = !!oddsData?.consensus;
                         trade.hadNews = !!(newsContext?.headlines?.length);
+                        trade.hadEnsemble = !!ensembleData?.shouldTrade;
+                        trade.hadSports = !!sportsContext;
+                        trade.hadEconomic = !!econContext;
+                        trade.hadWeather = !!weatherContext;
+                        trade.apiCost = liveContext.odds?.consensus ? 0.15 : 0.30;
+                        if (ensembleData) trade.apiCost += 0.05;
                         trade.category = category;
                         trade.strategy = 'auto-trade';
                         trade.eventTicker = eventTicker;
@@ -537,23 +546,51 @@ JSON: {"action": "BUY YES"|"BUY NO"|"HOLD", "confidence": "low"|"medium"|"high",
     }
 }
 
+// Ask Claude if a bookmaker/market divergence is justified (tiebreaker role)
+async function runTiebreakerStage(market, apiKey, oddsProb, kalshiPrice, liveContext) {
+    const selfReflection = buildSelfReflectionContext(20);
+    const newsSection = liveContext.news?.headlines?.length > 0
+        ? `\nRecent News:\n${liveContext.news.headlines.map((h, i) => `- ${h}${liveContext.news.snippets?.[i] ? ': ' + liveContext.news.snippets[i] : ''}`).join('\n')}`
+        : '\nNo recent news available.';
+
+    const sportsSection = liveContext.sports ? '\nLive Sports Data:\n' + liveContext.sports : '';
+
+    const prompt = `You are checking if a prediction market price divergence is justified.
+
+Bookmaker odds imply this event has a ${(oddsProb * 100).toFixed(0)}% chance of YES.
+The Kalshi market prices it at ${(kalshiPrice * 100).toFixed(0)}%.
+That is a ${Math.abs((oddsProb - kalshiPrice) * 100).toFixed(0)} percentage point gap.
+${selfReflection}
+Question: ${market.question}
+Description: ${market.description || 'N/A'}
+${newsSection}${sportsSection}
+
+Is there a specific reason (injury, suspension, lineup change, breaking news, weather) that explains why the Kalshi price differs from the bookmaker odds? If not, the bookmaker odds are likely more accurate.
+
+JSON: {"divergenceExplained": true|false, "reason": "1 sentence or null", "adjustmentDirection": "toward_market"|"toward_odds"|"none", "adjustmentMagnitude": 0.0-0.10}`;
+
+    const text = await callClaude(apiKey, prompt, 250);
+    try {
+        return parseJsonResponse(text);
+    } catch {
+        return { divergenceExplained: false, reason: null, adjustmentDirection: 'none', adjustmentMagnitude: 0 };
+    }
+}
+
 async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTrade, liveContext) {
     const prices = market.outcomePrices || [];
     const yesPrice = prices[0] ? parseFloat((parseFloat(prices[0]) * 100).toFixed(0)) : 50;
 
-    // ── Stage 1: Independent research (no market price shown) ──
-    const research = await runResearchStage(market, apiKey, liveContext);
-    const rawProb = research.result.probability;
-
     // ── CALIBRATION: Platt scaling with context-aware k ──
-    // Uses sigmoid(k * logit(raw) + b) where k < 1 compresses toward 50%.
-    // When bookmaker odds exist, use them as the BASE probability and allow
-    // Claude only a small Platt-scaled adjustment on top.
+    // When bookmaker odds exist, use them as BASE and Claude as tiebreaker.
+    // When no odds, use Claude research stage + Platt scaling.
 
     let researchProb;
+    let rawProb;
+    let researchResult = { keyFactors: [], confidence: 'low' };
 
     if (liveContext.odds?.consensus) {
-        // BEST CASE: Use bookmaker odds as base probability (they spend millions on this)
+        // BEST CASE: Bookmaker odds are the base. Claude only checks for exceptions.
         const consensusEntries = Object.entries(liveContext.odds.consensus);
         const totalConsensus = consensusEntries.reduce((sum, [, d]) => sum + d.avgProb, 0);
 
@@ -562,23 +599,35 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
             const [side1, side2] = consensusEntries;
             const p1 = totalConsensus > 0 ? side1[1].avgProb / totalConsensus : side1[1].avgProb;
             const p2 = totalConsensus > 0 ? side2[1].avgProb / totalConsensus : side2[1].avgProb;
-            oddsBaseProb = rawProb >= 0.5 ? Math.max(p1, p2) : Math.min(p1, p2);
+            // Match the odds side to Kalshi's YES side
+            oddsBaseProb = yesPrice >= 50 ? Math.max(p1, p2) : Math.min(p1, p2);
         } else {
             const sorted = consensusEntries.sort((a, b) => b[1].avgProb - a[1].avgProb);
             oddsBaseProb = totalConsensus > 0 ? sorted[0][1].avgProb / totalConsensus : sorted[0][1].avgProb;
         }
 
-        // Platt-scale Claude's estimate, then allow ±5pt adjustment on odds base
-        const calibratedRaw = calibrateWithContext(rawProb, {
-            hasOdds: true,
-            hasEnsemble: !!liveContext.ensemble?.shouldTrade,
-            hasNews: !!(liveContext.news?.headlines?.length),
-            category: null,
-        });
-        const claudeAdjustment = Math.max(-0.05, Math.min(0.05, calibratedRaw - oddsBaseProb));
-        researchProb = oddsBaseProb + claudeAdjustment;
+        // Ask Claude only: "Is the divergence explained by news?"
+        const tiebreaker = await runTiebreakerStage(market, apiKey, oddsBaseProb, yesPrice / 100, liveContext);
+
+        // If Claude found a reason the divergence is justified, adjust toward market
+        let adjustment = 0;
+        if (tiebreaker.divergenceExplained && tiebreaker.adjustmentDirection === 'toward_market') {
+            adjustment = Math.min(0.05, tiebreaker.adjustmentMagnitude || 0.03);
+            const direction = yesPrice / 100 > oddsBaseProb ? 1 : -1;
+            adjustment *= direction;
+        }
+
+        rawProb = oddsBaseProb;
+        researchProb = oddsBaseProb + adjustment;
+        researchResult = {
+            keyFactors: tiebreaker.reason ? [tiebreaker.reason] : ['Bookmaker odds used as base'],
+            confidence: tiebreaker.divergenceExplained ? 'medium' : 'high',
+        };
     } else if (liveContext.ensemble?.shouldTrade && liveContext.ensemble.disagreement < 0.15) {
-        // GOOD CASE: Platt-scale both Claude and ensemble, then blend
+        // GOOD CASE: Run Claude research + ensemble blend
+        const research = await runResearchStage(market, apiKey, liveContext);
+        rawProb = research.result.probability;
+        researchResult = research.result;
         const calibratedRaw = calibrateWithContext(rawProb, {
             hasOdds: false,
             hasEnsemble: true,
@@ -594,7 +643,10 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         });
         researchProb = ensembleCalibrated * 0.6 + calibratedRaw * 0.4;
     } else {
-        // WORST CASE: Claude alone — Platt scaling handles the shrinkage
+        // WORST CASE: Claude alone — run research stage, Platt scaling handles shrinkage
+        const research = await runResearchStage(market, apiKey, liveContext);
+        rawProb = research.result.probability;
+        researchResult = research.result;
         researchProb = calibrateWithContext(rawProb, {
             hasOdds: false,
             hasEnsemble: false,
@@ -656,14 +708,14 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
 
     const recommendation = {
         action,
-        confidence: research.result.confidence || 'medium',
+        confidence: researchResult.confidence || 'medium',
         edge: calibratedEdge,
         kellyFraction,
-        reasoning: `Research: ${(researchProb * 100).toFixed(0)}% vs market ${yesPrice}¢ (${calibratedEdge.toFixed(1)}pt edge). ${research.result.keyFactors?.join('; ') || ''}`,
+        reasoning: `Research: ${(researchProb * 100).toFixed(0)}% vs market ${yesPrice}¢ (${calibratedEdge.toFixed(1)}pt edge). ${researchResult.keyFactors?.join('; ') || ''}`,
         researchProbability: researchProb,
         rawProbability: rawProb,
-        researchKeyFactors: research.result.keyFactors || [],
-        researchConfidence: research.result.confidence || 'low',
+        researchKeyFactors: researchResult.keyFactors || [],
+        researchConfidence: researchResult.confidence || 'low',
         // Data availability flags for edge-based confidence boosting
         hadOdds: !!liveContext.odds?.consensus,
         hadNews: !!(liveContext.news?.headlines?.length >= 2),
@@ -671,7 +723,7 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         ensembleDisagreement: liveContext.ensemble?.disagreement ?? 1,
     };
 
-    return { recommendation, rawResponse: research.rawText };
+    return { recommendation, rawResponse: `Prob: ${(researchProb*100).toFixed(0)}% (raw: ${(rawProb*100).toFixed(0)}%)` };
 }
 
 // ─── Trade Execution ───

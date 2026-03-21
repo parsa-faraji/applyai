@@ -277,9 +277,10 @@ async function runCycle() {
         if (Date.now() - ts > COOLDOWN_MS) stats.recentExits.delete(key);
     }
     const spentSoFar = (safe?.totalSpent || 0) + (weather?.totalSpent || 0);
+    const autoTradeMode = metaConfig?.strategyModes?.['auto-trade'] || 'paper';
     const botBudget = Math.min(metaConfig?.strategyBudgets?.['auto-trade'] ?? 50, Math.max(0, cashBalance - spentSoFar));
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
-        budget: botBudget, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 3,
+        budget: botBudget, maxPerTrade: 10, riskLevel: 'moderate', dryRun: autoTradeMode !== 'live', marketLimit: 3,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
         existingEventTickers: (sync?.positions || []).map(p => p.event_ticker).filter(Boolean),
         recentlyExited: [...stats.recentExits.keys()],
@@ -295,9 +296,10 @@ async function runCycle() {
             if (t.ticker) stats.sessionTrades.add(t.ticker);
             if (t.eventTicker) stats.sessionTrades.add(t.eventTicker);
         }
-        log(`  Bot: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
+        const modeTag = autoTradeMode !== 'live' ? ' [PAPER]' : '';
+        log(`  Bot${modeTag}: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
         for (const t of (bot.trades || [])) {
-            log(`    → ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
+            log(`    →${modeTag} ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
         }
         for (const a of (bot.analyses || [])) {
             if (a.recommendation?.action !== 'HOLD') {

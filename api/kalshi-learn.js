@@ -119,7 +119,16 @@ export default async function handler(req, res) {
                 contracts,
                 hadOdds: trade.hadOdds || false,
                 hadNews: trade.hadNews || false,
+                hadEnsemble: trade.hadEnsemble || false,
+                hadSports: trade.hadSports || false,
+                hadEconomic: trade.hadEconomic || false,
+                hadWeather: trade.hadWeather || false,
                 edge: trade.edge || null,
+                estimated_edge: trade.estimated_edge || trade.edge || null,
+                rawProbability: trade.rawProbability || null,
+                calibratedProbability: trade.calibratedProbability || null,
+                marketPrice: trade.marketPrice || trade.price || null,
+                apiCost: trade.apiCost || null,
                 confidence: trade.confidence || null,
             };
 
