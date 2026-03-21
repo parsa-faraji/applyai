@@ -21,46 +21,45 @@ const RESOLUTION_LOG = path.join(LOG_DIR, 'resolutions.jsonl');
 const MONITOR_LOG = path.join(LOG_DIR, 'monitor-decisions.jsonl');
 const CYCLE_LOG = path.join(LOG_DIR, 'cycle-actions.jsonl');
 
-// Detect if we're on a read-only filesystem (Vercel serverless)
-let _writable = null;
-function isWritable() {
-    if (_writable !== null) return _writable;
-    try {
-        if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
-        // Test write
-        const testFile = path.join(LOG_DIR, '.write-test');
-        fs.writeFileSync(testFile, 'ok');
-        fs.unlinkSync(testFile);
-        _writable = true;
-    } catch {
-        _writable = false;
-    }
-    return _writable;
-}
-
-// Ensure data directory exists
-function ensureDir() {
-    if (!isWritable()) return false;
+// Eagerly create data directory on module load
+try {
     if (!fs.existsSync(LOG_DIR)) {
         fs.mkdirSync(LOG_DIR, { recursive: true });
+        console.log(`[trade-logger] Created data directory: ${LOG_DIR}`);
     }
-    return true;
+} catch (err) {
+    console.error(`[trade-logger] FATAL: Cannot create data directory ${LOG_DIR}: ${err.message}`);
+}
+
+// Ensure data directory exists (called before each write)
+function ensureDir() {
+    try {
+        if (!fs.existsSync(LOG_DIR)) {
+            fs.mkdirSync(LOG_DIR, { recursive: true });
+        }
+        return true;
+    } catch (err) {
+        console.error(`[trade-logger] Cannot write to ${LOG_DIR}: ${err.message}`);
+        return false;
+    }
 }
 
 /**
  * Log a trade execution (actual order placed)
  */
 export function logTrade(trade) {
-    if (!ensureDir()) return null; // read-only filesystem, skip silently
+    if (!ensureDir()) return null;
     const entry = {
         type: 'trade',
         timestamp: new Date().toISOString(),
         ...trade,
     };
-    // Use append with flag 'a' — safe for sequential writes within a process.
-    // Server.js forks child processes, but each endpoint runs sequentially within
-    // autopilot's cycle, so concurrent writes shouldn't happen in practice.
-    fs.appendFileSync(TRADE_LOG, JSON.stringify(entry) + '\n');
+    try {
+        fs.appendFileSync(TRADE_LOG, JSON.stringify(entry) + '\n');
+    } catch (err) {
+        console.error(`[trade-logger] logTrade failed: ${err.message}`);
+        return null;
+    }
     return entry;
 }
 
@@ -74,7 +73,12 @@ export function logDecision(decision) {
         timestamp: new Date().toISOString(),
         ...decision,
     };
-    fs.appendFileSync(DECISION_LOG, JSON.stringify(entry) + '\n');
+    try {
+        fs.appendFileSync(DECISION_LOG, JSON.stringify(entry) + '\n');
+    } catch (err) {
+        console.error(`[trade-logger] logDecision failed: ${err.message}`);
+        return null;
+    }
     return entry;
 }
 
@@ -103,7 +107,12 @@ export function logResolution(resolution) {
         timestamp: new Date().toISOString(),
         ...resolution,
     };
-    fs.appendFileSync(RESOLUTION_LOG, JSON.stringify(entry) + '\n');
+    try {
+        fs.appendFileSync(RESOLUTION_LOG, JSON.stringify(entry) + '\n');
+    } catch (err) {
+        console.error(`[trade-logger] logResolution failed: ${err.message}`);
+        return null;
+    }
     return entry;
 }
 
@@ -155,7 +164,12 @@ export function logMonitorDecision(decision) {
         timestamp: new Date().toISOString(),
         ...decision,
     };
-    fs.appendFileSync(MONITOR_LOG, JSON.stringify(entry) + '\n');
+    try {
+        fs.appendFileSync(MONITOR_LOG, JSON.stringify(entry) + '\n');
+    } catch (err) {
+        console.error(`[trade-logger] logMonitorDecision failed: ${err.message}`);
+        return null;
+    }
     return entry;
 }
 
@@ -169,7 +183,12 @@ export function logCycleAction(action) {
         timestamp: new Date().toISOString(),
         ...action,
     };
-    fs.appendFileSync(CYCLE_LOG, JSON.stringify(entry) + '\n');
+    try {
+        fs.appendFileSync(CYCLE_LOG, JSON.stringify(entry) + '\n');
+    } catch (err) {
+        console.error(`[trade-logger] logCycleAction failed: ${err.message}`);
+        return null;
+    }
     return entry;
 }
 

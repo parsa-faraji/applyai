@@ -144,7 +144,7 @@ export default async function handler(req, res) {
                             market: market.question, ticker: rawMarket.ticker, category,
                             yesPrice: yesPriceCents, passed: false, skipReason, isSport: true,
                         });
-                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason }); } catch {}
+                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason }); } catch (err) { console.error('[safe-compounder] logDecision failed:', err.message); }
                         continue;
                     }
 
@@ -157,7 +157,7 @@ export default async function handler(req, res) {
                             market: market.question, ticker: rawMarket.ticker, category,
                             yesPrice: yesPriceCents, passed: false, skipReason, isSport: true,
                         });
-                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason }); } catch {}
+                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason }); } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
                         continue;
                     }
 
@@ -185,7 +185,7 @@ export default async function handler(req, res) {
                             yesPrice: yesPriceCents, passed: false, skipReason, isSport: true,
                             bookmakerLongshotProb: parseFloat(bookmakerLongshotProb.toFixed(3)),
                         });
-                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason, bookmakerLongshotProb }); } catch {}
+                        try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason, bookmakerLongshotProb }); } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
                         continue;
                     }
                 }
@@ -287,7 +287,7 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence citing specif
                                 bookmakerLongshotProb: parseFloat(bookmakerLongshotProb.toFixed(3)),
                                 claudeYesProb: parseFloat(trueYesProb.toFixed(3)),
                             });
-                            try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason, bookmakerLongshotProb, claudeYesProb: trueYesProb }); } catch {}
+                            try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', reason: skipReason, bookmakerLongshotProb, claudeYesProb: trueYesProb }); } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
                             continue;
                         }
                     }
@@ -335,7 +335,7 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence citing specif
                 if (trueNoProb < 0.90) {
                     analysisRecord.skipReason = `NO prob ${(trueNoProb * 100).toFixed(0)}% < 90% threshold`;
                     report.analyses.push(analysisRecord);
-                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason, ...(isSportsMarket && { hadOdds: true, bookmakerNoProb }) }); } catch {}
+                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason, ...(isSportsMarket && { hadOdds: true, bookmakerNoProb }) }); } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
                     continue;
                 }
 
@@ -343,7 +343,7 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence citing specif
                 if (edge <= minEdge) {
                     analysisRecord.skipReason = `Edge ${(edge * 100).toFixed(1)}¢ <= ${(minEdge * 100).toFixed(0)}¢ threshold${isSportsMarket ? ' (sports)' : ''}`;
                     report.analyses.push(analysisRecord);
-                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason, ...(isSportsMarket && { hadOdds: true, bookmakerNoProb }) }); } catch {}
+                    try { logDecision({ strategy: 'safe-compounder', ticker: rawMarket.ticker, category, market: market.question, action: 'SKIP', rawNoProb: trueNoProb, edge, reason: analysisRecord.skipReason, ...(isSportsMarket && { hadOdds: true, bookmakerNoProb }) }); } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
                     continue;
                 }
 
@@ -402,7 +402,7 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence citing specif
                     trade.usedBookmakerDirectly = usedBookmakerDirectly;
                     trade.isSport = true;
                 }
-                try { logTrade(trade); } catch {}
+                try { logTrade(trade); } catch (err) { console.error('[safe-compounder] logTrade failed:', err.message); }
 
                 report.trades.push(trade);
                 report.tradesExecuted++;
@@ -496,6 +496,6 @@ function decodeKey(key) {
     try {
         const decoded = Buffer.from(key, 'base64').toString('utf-8');
         if (decoded.includes('-----BEGIN')) return decoded;
-    } catch {}
+    } catch (err) { console.error('[safe-compounder] logging failed:', err.message); }
     return key;
 }

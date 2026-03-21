@@ -22,7 +22,7 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODELS = [
     { id: 'gpt4o', provider: 'openrouter', model: 'openai/gpt-4o', weight: 0.35, label: 'GPT-4o' },
     { id: 'gemini', provider: 'openrouter', model: 'google/gemini-2.5-flash', weight: 0.35, label: 'Gemini' },
-    { id: 'deepseek', provider: 'openrouter', model: 'deepseek/deepseek-r1', weight: 0.30, label: 'DeepSeek' },
+    { id: 'deepseek', provider: 'openrouter', model: 'deepseek/deepseek-chat', weight: 0.30, label: 'DeepSeek' },
 ];
 
 /**
@@ -34,7 +34,7 @@ const MODELS = [
  */
 async function queryModel(model, prompt, keys) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout per model
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout per model
     try {
         let text;
 
@@ -104,7 +104,7 @@ async function queryModel(model, prompt, keys) {
         };
     } catch (err) {
         clearTimeout(timeoutId);
-        const msg = err.name === 'AbortError' ? 'timeout (10s)' : err.message;
+        const msg = err.name === 'AbortError' ? 'timeout (5s)' : err.message;
         console.error(`  Ensemble [${model.label}]: ${msg}`);
         return null;
     }

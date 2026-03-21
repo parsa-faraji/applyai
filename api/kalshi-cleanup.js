@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { maxAgeMinutes = 15 } = req.body;
+    const { maxAgeMinutes = 15, forceAll = false } = req.body;
     const kalshiKeyId = req.headers['x-kalshi-key-id'] || process.env.KALSHI_API_KEY_ID;
     const kalshiPrivateKey = req.headers['x-kalshi-private-key'] || process.env.KALSHI_PRIVATE_KEY;
 
@@ -42,6 +42,18 @@ export default async function handler(req, res) {
             const orderPrice = parseFloat(order.yes_price_dollars || order.no_price_dollars || '0') * 100;
             const side = (order.side || 'yes').toLowerCase();
             const action = (order.action || 'buy').toLowerCase();
+
+            // Force-cancel mode: cancel ALL resting orders unconditionally (used before exits to free cash)
+            if (forceAll) {
+                try {
+                    await authFetch('DELETE', `/portfolio/orders/${order.order_id}`, creds);
+                    cancelled++;
+                    results.push({ ticker, age: ageMin, status: 'cancelled', reason: 'forced (pre-exit)' });
+                } catch (err) {
+                    results.push({ ticker, age: ageMin, status: 'failed', error: err.message });
+                }
+                continue;
+            }
 
             // If order is young, always keep
             if (age <= maxAge) {

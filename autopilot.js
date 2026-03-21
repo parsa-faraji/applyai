@@ -24,6 +24,17 @@ import { generateDailyReport } from './api/lib/daily-report.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Ensure data directory exists at startup (critical for trade logging + reports)
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        console.log(`Created data directory: ${DATA_DIR}`);
+    } catch (err) {
+        console.error(`WARNING: Cannot create data directory: ${err.message}`);
+    }
+}
+
 // Load .env file if it exists
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
@@ -251,7 +262,7 @@ async function runCycle() {
         log(`  Safe: scanned ${safe.marketsScanned || '?'}, ${safe.candidates || 0} candidates, ${safe.tradesExecuted || 0} trades`);
         for (const t of (safe.trades || [])) {
             log(`    → NO ${t.market?.slice(0, 50)} — ${t.count} contracts @ ${t.price}¢`);
-            try { logCycleAction({ action: 'buy', strategy: 'safe-compounder', ticker: t.ticker, side: 'no', count: t.count, price: t.price, market: t.market, cost: t.cost, edge: t.edge, cycle: stats.cyclesRun }); } catch {}
+            try { logCycleAction({ action: 'buy', strategy: 'safe-compounder', ticker: t.ticker, side: 'no', count: t.count, price: t.price, market: t.market, cost: t.cost, edge: t.edge, cycle: stats.cyclesRun }); } catch (err) { console.error('logCycleAction failed:', err.message); }
         }
     }
 
@@ -305,7 +316,7 @@ async function runCycle() {
         log(`  Bot${modeTag}: scanned ${bot.marketsScanned || '?'}, analyzed ${bot.marketsAnalyzed || '?'}, ${bot.tradesExecuted || 0} trades (total: ${stats.totalTrades})`);
         for (const t of (bot.trades || [])) {
             log(`    →${modeTag} ${t.outcome} ${t.market?.slice(0, 50)} — $${t.amount} @ ${(t.price * 100).toFixed(0)}¢`);
-            try { logCycleAction({ action: 'buy', strategy: 'auto-trade', paper: autoTradeMode !== 'live', ticker: t.ticker, side: t.side, count: t.count || t.shares, price: t.price, market: t.market, cost: t.cost || t.amount, edge: t.edge, cycle: stats.cyclesRun }); } catch {}
+            try { logCycleAction({ action: 'buy', strategy: 'auto-trade', paper: autoTradeMode !== 'live', ticker: t.ticker, side: t.side, count: t.count || t.shares, price: t.price, market: t.market, cost: t.cost || t.amount, edge: t.edge, cycle: stats.cyclesRun }); } catch (err) { console.error('logCycleAction failed:', err.message); }
         }
         for (const a of (bot.analyses || [])) {
             if (a.recommendation?.action !== 'HOLD') {
@@ -361,8 +372,8 @@ async function runCycle() {
             if (filteredExits.length > 0) {
                 // Cancel ALL resting orders first to free up locked cash
                 // (Kalshi locks cash in resting buy orders — this is why sells fail with insufficient_balance)
-                log(`  Cancelling resting orders to free cash for ${filteredExits.length} exit(s)...`);
-                const cleanup = await callEndpoint('Pre-exit Cleanup', '/api/kalshi-cleanup', { maxAgeMinutes: 0 });
+                log(`  Cancelling ALL resting orders to free cash for ${filteredExits.length} exit(s)...`);
+                const cleanup = await callEndpoint('Pre-exit Cleanup', '/api/kalshi-cleanup', { maxAgeMinutes: 0, forceAll: true });
                 if (cleanup) {
                     log(`    Cancelled ${cleanup.cancelled || 0} resting orders`);
                 }
@@ -381,23 +392,33 @@ async function runCycle() {
 
                     const side = (pos.outcome || 'yes').toLowerCase();
                     try {
-                        const sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
+                        let sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
                             ticker: exit.ticker || pos.ticker,
                             side,
                             action: 'sell',
                             count: Math.abs(shares),
                         });
+                        // Retry once on insufficient balance (cash may need time to settle after order cancellations)
+                        if (!sellResult?.trade && (sellResult?.error?.includes('insufficient') || JSON.stringify(sellResult).includes('insufficient'))) {
+                            log(`    Retry: waiting for balance to settle...`);
+                            await new Promise(r => setTimeout(r, 2000));
+                            sellResult = await callEndpoint('Exit Trade (retry)', '/api/kalshi-trade', {
+                                ticker: exit.ticker || pos.ticker,
+                                side,
+                                action: 'sell',
+                                count: Math.abs(shares),
+                            });
+                        }
                         if (sellResult?.trade) {
                             stats.totalSells++;
                             stats.recentExits.set(exit.ticker, Date.now());
                             const exitedPos = positions.find(p => p.ticker === exit.ticker);
                             if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
                             log(`    Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
-                            // Persist exit action for audit trail
-                            try { logCycleAction({ action: 'exit', ticker: exit.ticker, side, shares: Math.abs(shares), price: sellResult.trade.price, reason: exit.reason, pnlPct: exit.pnlPct, market: pos?.market, cycle: stats.cyclesRun }); } catch {}
+                            try { logCycleAction({ action: 'exit', ticker: exit.ticker, side, shares: Math.abs(shares), price: sellResult.trade.price, reason: exit.reason, pnlPct: exit.pnlPct, market: pos?.market, cycle: stats.cyclesRun }); } catch (err) { console.error('logCycleAction exit failed:', err.message); }
                         } else {
                             log(`    Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
-                            try { logCycleAction({ action: 'exit_failed', ticker: exit.ticker, error: sellResult?.error || 'unknown', cycle: stats.cyclesRun }); } catch {}
+                            try { logCycleAction({ action: 'exit_failed', ticker: exit.ticker, error: sellResult?.error || 'unknown', cycle: stats.cyclesRun }); } catch (err) { console.error('logCycleAction exit_failed failed:', err.message); }
                         }
                     } catch (err) {
                         log(`    Sell error for ${exit.ticker}: ${err.message}`);

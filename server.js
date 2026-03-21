@@ -18,6 +18,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const WORKER = path.join(__dirname, '_api-worker.js');
 
+// Ensure data directory exists at server startup (critical for trade logging)
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        console.log('Created data/ directory for trade logging');
+    } catch (err) {
+        console.error('WARNING: Could not create data/ directory:', err.message);
+    }
+}
+
 const MIME = {
     '.html': 'text/html',
     '.js': 'text/javascript',

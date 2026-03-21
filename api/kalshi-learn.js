@@ -137,7 +137,7 @@ export default async function handler(req, res) {
             performance.resolved.add(trade.ticker);
 
             // Persist resolution to JSONL for self-reflection context
-            try { logResolution(resolution); } catch {}
+            try { logResolution(resolution); } catch (err) { console.error('[learn] logResolution failed:', err.message); }
 
             // 4. Update Platt scaling calibration
             // MUST use the RAW (pre-calibration) probability, not the calibrated one.

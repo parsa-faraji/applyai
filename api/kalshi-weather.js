@@ -302,29 +302,28 @@ export default async function handler(req, res) {
 
     try {
         // 1. Fetch weather markets from Kalshi
-        //    Query multiple weather series: KXHIGH* and KXLOW*
+        //    Kalshi's series_ticker requires exact match (e.g. 'KXHIGHNY', not 'KXHIGH'),
+        //    so we query each city-specific series individually.
         const weatherPrefixes = ['KXHIGH', 'KXLOW'];
+        const citySuffixes = Object.keys(TICKER_SUFFIX_TO_STATION);
         let allWeatherMarkets = [];
 
         for (const prefix of weatherPrefixes) {
-            try {
-                // Fetch markets with series_ticker prefix — paginate to get all
-                let cursor = '';
-                for (let page = 0; page < 3; page++) {
-                    const params = {
-                        series_ticker: prefix,
+            for (const suffix of citySuffixes) {
+                const seriesTicker = prefix + suffix;
+                try {
+                    const data = await getMarkets({
+                        series_ticker: seriesTicker,
                         status: 'open',
                         limit: 200,
-                    };
-                    if (cursor) params.cursor = cursor;
-                    const data = await getMarkets(params);
+                    });
                     const batch = data.markets || [];
-                    allWeatherMarkets.push(...batch);
-                    cursor = data.cursor || '';
-                    if (batch.length < 200 || !cursor) break;
+                    if (batch.length > 0) {
+                        allWeatherMarkets.push(...batch);
+                    }
+                } catch (err) {
+                    // Silently skip — most series won't have active markets
                 }
-            } catch (err) {
-                report.errors.push({ market: `fetch_${prefix}`, error: err.message });
             }
         }
 
@@ -334,12 +333,11 @@ export default async function handler(req, res) {
         const candidates = [];
         for (const rawMarket of allWeatherMarkets) {
             const seriesTicker = rawMarket.series_ticker || rawMarket.event_ticker || rawMarket.ticker || '';
-            const parsed = parseSeriesTicker(seriesTicker);
+            let parsed = parseSeriesTicker(seriesTicker);
             if (!parsed) {
                 // Also try parsing from ticker directly if series_ticker didn't work
-                const altParsed = parseSeriesTicker(rawMarket.ticker);
-                if (!altParsed) continue;
-                Object.assign(parsed || {}, altParsed);
+                parsed = parseSeriesTicker(rawMarket.ticker);
+                if (!parsed) continue;
             }
 
             const station = resolveStation(parsed.citySuffix);
@@ -453,7 +451,7 @@ export default async function handler(req, res) {
                             edge,
                             reason: analysisRecord.skipReason,
                         });
-                    } catch {}
+                    } catch (err) { console.error('[weather] logDecision failed:', err.message); }
                     continue;
                 }
 
@@ -522,7 +520,7 @@ export default async function handler(req, res) {
                 });
 
                 trade.category = category;
-                try { logTrade(trade); } catch {}
+                try { logTrade(trade); } catch (err) { console.error('[weather] logTrade failed:', err.message); }
 
                 report.trades.push(trade);
                 report.tradesExecuted++;

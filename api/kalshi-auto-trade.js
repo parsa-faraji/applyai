@@ -297,7 +297,7 @@ export default async function handler(req, res) {
                         endDate: market.endDate || null,
                         reasoning: rec.reasoning,
                     });
-                } catch {} // don't let logging failures break trading
+                } catch (err) { console.error('[auto-trade] logDecision failed:', err.message); }
                 if (shouldExecute(rec, riskLevel)) {
                     const tradeAmount = calculateKellySize(rec, budgetLeft, maxPerTrade, budget, maxSingleMarketPct);
 
@@ -355,7 +355,7 @@ export default async function handler(req, res) {
                         trade.eventTicker = eventTicker;
 
                         // Persist to trade log
-                        try { logTrade(trade); } catch {}
+                        try { logTrade(trade); } catch (err) { console.error('[auto-trade] logTrade failed:', err.message); }
 
                         report.trades.push(trade);
                         report.tradesExecuted++;

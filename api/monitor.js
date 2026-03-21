@@ -125,7 +125,7 @@ export default async function handler(req, res) {
                         endDate: pos.endDate || null,
                         hoursToResolution: pos.endDate ? (new Date(pos.endDate) - new Date()) / 3600000 : null,
                     });
-                } catch {}
+                } catch (err) { console.error('[monitor] logMonitorDecision failed:', err.message); }
 
                 if (decision.action === 'SELL') {
                     alerts.push({ type: 'smart_exit', severity: 'critical', market: pos.market, message: `SMART EXIT: ${triggerMsg}. Claude says: ${decision.reasoning}`, tokenId: pos.tokenId });
