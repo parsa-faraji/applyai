@@ -87,6 +87,77 @@ export default async function handler(req, res) {
             error: a.error || '',
         }));
 
+        // Paper trades tracker — merge cycle-action paper buys with resolution outcomes
+        const paperBuys = allCycles.filter(a => a.action === 'buy' && a.paper && a.ticker);
+        const resolvedTickers = new Set(allResolutions.map(r => r.ticker));
+
+        const paperTrades = paperBuys.map(pb => {
+            const resolution = allResolutions.find(r => r.ticker === pb.ticker && r.paper);
+            if (resolution) {
+                return {
+                    ticker: pb.ticker,
+                    market: pb.market || resolution.market || pb.ticker,
+                    strategy: pb.strategy || 'auto-trade',
+                    side: pb.side || 'yes',
+                    entryPrice: pb.price || 0,
+                    count: pb.count || 1,
+                    edge: pb.edge || null,
+                    time: pb.timestamp,
+                    status: 'resolved',
+                    won: resolution.won,
+                    pnl: resolution.totalPnl || 0,
+                    settlementPrice: resolution.settlementPrice,
+                    resolvedAt: resolution.timestamp,
+                };
+            }
+            return {
+                ticker: pb.ticker,
+                market: pb.market || pb.ticker,
+                strategy: pb.strategy || 'auto-trade',
+                side: pb.side || 'yes',
+                entryPrice: pb.price || 0,
+                count: pb.count || 1,
+                edge: pb.edge || null,
+                time: pb.timestamp,
+                status: 'open',
+            };
+        }).reverse(); // newest first
+
+        // Also include live (non-paper) trades that haven't resolved
+        const liveTrades = allCycles.filter(a => a.action === 'buy' && !a.paper && a.ticker).map(lb => {
+            const resolution = allResolutions.find(r => r.ticker === lb.ticker && !r.paper);
+            if (resolution) {
+                return {
+                    ticker: lb.ticker,
+                    market: lb.market || resolution.market || lb.ticker,
+                    strategy: lb.strategy || 'safe-compounder',
+                    side: lb.side || 'no',
+                    entryPrice: lb.price || 0,
+                    count: lb.count || 1,
+                    edge: lb.edge || null,
+                    time: lb.timestamp,
+                    status: 'resolved',
+                    won: resolution.won,
+                    pnl: resolution.totalPnl || 0,
+                    settlementPrice: resolution.settlementPrice,
+                    resolvedAt: resolution.timestamp,
+                    live: true,
+                };
+            }
+            return {
+                ticker: lb.ticker,
+                market: lb.market || lb.ticker,
+                strategy: lb.strategy || 'safe-compounder',
+                side: lb.side || 'no',
+                entryPrice: lb.price || 0,
+                count: lb.count || 1,
+                edge: lb.edge || null,
+                time: lb.timestamp,
+                status: 'open',
+                live: true,
+            };
+        }).reverse();
+
         // All-time stats
         const totalWins = allResolutions.filter(r => r.won).length;
         const totalPnl = allResolutions.reduce((s, r) => s + (r.totalPnl || 0), 0);
@@ -113,6 +184,8 @@ export default async function handler(req, res) {
             },
             strategies,
             categories,
+            paperTrades,
+            liveTrades,
             recentActivity,
             recentMonitor: allMonitor.slice(-15).reverse().map(d => ({
                 time: d.timestamp,

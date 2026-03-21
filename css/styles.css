@@ -1649,6 +1649,74 @@ body {
     text-align: right;
 }
 
+/* Trades tracker */
+.dash-trades-panel {
+    margin-bottom: 16px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.dash-trades-panel .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.dash-trades-tabs {
+    display: flex;
+    gap: 4px;
+}
+
+.dash-tab {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.dash-tab:hover {
+    border-color: var(--border-light);
+    color: var(--text);
+}
+
+.dash-tab.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.dash-trades-table td {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.dash-trades-table .mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.dash-market-cell {
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+}
+
+.dash-side-yes { color: var(--green); font-weight: 600; font-size: 11px; }
+.dash-side-no { color: var(--red); font-weight: 600; font-size: 11px; }
+
+.tag-open {
+    background: var(--blue-bg);
+    color: var(--blue);
+}
+
 @media (max-width: 1200px) {
     .dash-summary {
         grid-template-columns: repeat(3, 1fr);

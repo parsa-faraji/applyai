@@ -92,6 +92,26 @@
                     </div>
                 </div>
 
+                <!-- Trades Tracker (full width) -->
+                <div class="panel dash-panel dash-trades-panel">
+                    <div class="panel-header">
+                        <h2>Trades Tracker</h2>
+                        <div class="dash-trades-tabs">
+                            <button class="dash-tab active" data-trades-tab="all">All</button>
+                            <button class="dash-tab" data-trades-tab="open">Open</button>
+                            <button class="dash-tab" data-trades-tab="resolved">Resolved</button>
+                            <button class="dash-tab" data-trades-tab="paper">Paper Only</button>
+                        </div>
+                    </div>
+                    <div id="dashTrades" class="dash-trades-content">
+                        <div class="dash-empty">
+                            <div class="dash-empty-icon">&#9634;</div>
+                            <p>No trades recorded yet</p>
+                            <p class="dash-empty-hint">Paper and live trades will appear here with real-time status</p>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="dash-columns">
                     <!-- Left: Activity Feed -->
                     <div class="panel dash-panel">

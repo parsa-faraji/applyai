@@ -46,6 +46,8 @@
     }
 
     function render(d) {
+        lastData = d;
+
         // Status
         const statusEl = document.getElementById('dashStatus');
         if (statusEl) {
@@ -98,6 +100,9 @@
                 return '';
             }).join('');
         }
+
+        // Trades tracker
+        renderTrades(d);
 
         // Strategy performance table
         const stratEl = document.getElementById('dashStrategies');
@@ -194,6 +199,93 @@
         }
     }
 
+    // ── Trades tracker ──
+
+    let currentTradesFilter = 'all';
+
+    // Tab switching for trades
+    document.addEventListener('click', (e) => {
+        if (!e.target.matches('[data-trades-tab]')) return;
+        document.querySelectorAll('[data-trades-tab]').forEach(t => t.classList.remove('active'));
+        e.target.classList.add('active');
+        currentTradesFilter = e.target.dataset.tradesTab;
+        if (lastData) renderTrades(lastData);
+    });
+
+    let lastData = null;
+
+    function renderTrades(d) {
+        const el = document.getElementById('dashTrades');
+        if (!el) return;
+
+        // Merge paper + live trades, sort newest first
+        const all = [
+            ...(d.paperTrades || []),
+            ...(d.liveTrades || []),
+        ].sort((a, b) => new Date(b.time) - new Date(a.time));
+
+        // Apply filter
+        let filtered = all;
+        if (currentTradesFilter === 'open') filtered = all.filter(t => t.status === 'open');
+        else if (currentTradesFilter === 'resolved') filtered = all.filter(t => t.status === 'resolved');
+        else if (currentTradesFilter === 'paper') filtered = all.filter(t => !t.live);
+
+        if (filtered.length === 0) {
+            el.innerHTML = `<div class="dash-empty">
+                <p>${currentTradesFilter === 'all' ? 'No trades yet' : `No ${currentTradesFilter} trades`}</p>
+                <p class="dash-empty-hint">Trades appear as the bot executes cycles</p>
+            </div>`;
+            return;
+        }
+
+        el.innerHTML = `<table class="dash-table dash-trades-table">
+            <thead><tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Strategy</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th>Entry</th>
+                <th>Qty</th>
+                <th>Edge</th>
+                <th>Status</th>
+                <th>Result</th>
+            </tr></thead>
+            <tbody>${filtered.slice(0, 50).map(t => {
+                const typeTag = t.live
+                    ? '<span class="dash-tag tag-live">LIVE</span>'
+                    : '<span class="dash-tag tag-paper">PAPER</span>';
+
+                let statusHtml;
+                if (t.status === 'resolved') {
+                    const wonClass = t.won ? 'tag-live' : 'tag-err';
+                    const wonText = t.won ? 'WON' : 'LOST';
+                    statusHtml = `<span class="dash-tag ${wonClass}">${wonText}</span>`;
+                } else {
+                    statusHtml = '<span class="dash-tag tag-open">OPEN</span>';
+                }
+
+                let resultHtml = '--';
+                if (t.status === 'resolved') {
+                    resultHtml = `<span class="${t.pnl >= 0 ? 'clr-green' : 'clr-red'}">${formatPnl(t.pnl)}</span>`;
+                }
+
+                return `<tr>
+                    <td class="dash-time">${fmtDateTime(t.time)}</td>
+                    <td>${typeTag}</td>
+                    <td>${t.strategy}</td>
+                    <td class="dash-market-cell" title="${t.market}">${trunc(t.market, 35)}</td>
+                    <td><span class="dash-side-${t.side}">${t.side.toUpperCase()}</span></td>
+                    <td class="mono">${fmtPrice(t.entryPrice)}</td>
+                    <td class="mono">${t.count}</td>
+                    <td class="mono">${t.edge ? t.edge.toFixed(1) + 'pts' : '--'}</td>
+                    <td>${statusHtml}</td>
+                    <td class="mono">${resultHtml}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>`;
+    }
+
     // Helpers
     function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
     function colorPnl(id, val) {
@@ -208,6 +300,15 @@
     function fmtTime(ts) {
         try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
         catch { return ''; }
+    }
+    function fmtDateTime(ts) {
+        try {
+            const d = new Date(ts);
+            const month = (d.getMonth() + 1).toString().padStart(2, '0');
+            const day = d.getDate().toString().padStart(2, '0');
+            const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return `${month}/${day} ${time}`;
+        } catch { return ''; }
     }
     function trunc(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : (s || ''); }
 })();
