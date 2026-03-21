@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { readMetaConfig } from './api/lib/meta-config.js';
 import { logCycleAction } from './api/lib/trade-logger.js';
 import { runMetaCycle } from './meta-agent.js';
+import { generateDailyReport } from './api/lib/daily-report.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,6 +70,7 @@ const stats = {
     startTime: Date.now(),
     recentExits: new Map(),      // ticker/event_ticker → timestamp (2h cooldown)
     sessionTrades: new Set(),    // tickers the bot has traded this session
+    reportGeneratedToday: false, // flag to generate report once per day
 };
 
 async function callEndpoint(name, path, body = {}) {
@@ -440,7 +442,22 @@ async function runCycle() {
         }
     }
 
-    // 9. Meta-agent: compute stats, update strategy modes/budgets
+    // 9. Nightly report: generate PDF at end of day (11 PM - midnight)
+    const hour = new Date().getHours();
+    if (hour === 23 && !stats.reportGeneratedToday) {
+        try {
+            log('  Generating daily report...');
+            const reportPath = await generateDailyReport();
+            stats.reportGeneratedToday = true;
+            log(`  Report saved: ${reportPath}`);
+        } catch (err) {
+            log(`  Report generation failed: ${err.message}`);
+        }
+    }
+    // Reset flag at midnight
+    if (hour === 0) stats.reportGeneratedToday = false;
+
+    // 10. Meta-agent: compute stats, update strategy modes/budgets
     // Runs after learning so it has the latest resolution data.
     // Pure local math — no API calls, runs in milliseconds.
     if (stats.cyclesRun % 3 === 0) {
