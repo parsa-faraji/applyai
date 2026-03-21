@@ -1337,3 +1337,219 @@ body {
         display: none;
     }
 }
+
+/* ═══ Dashboard ═══ */
+
+.dashboard-layout {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.dash-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.dash-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-align: center;
+}
+
+.dash-card-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.dash-card-value {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text);
+}
+
+.dash-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.dash-panel {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.dash-right {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.dash-feed {
+    padding: 8px;
+}
+
+.dash-feed-sm {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.dash-row {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.dash-row:last-child { border-bottom: none; }
+
+.dash-row-buy { border-left: 3px solid var(--green); }
+.dash-row-sell { border-left: 3px solid var(--yellow); }
+.dash-row-err { border-left: 3px solid var(--red); }
+
+.dash-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 50px;
+}
+
+.dash-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.badge-buy { background: var(--green-bg); color: var(--green); }
+.badge-sell { background: var(--yellow-bg); color: var(--yellow); }
+.badge-hold { background: var(--blue-bg); color: var(--blue); }
+.badge-err { background: var(--red-bg); color: var(--red); }
+
+.dash-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+}
+
+.tag-paper { background: var(--yellow-bg); color: var(--yellow); }
+.tag-live { background: var(--green-bg); color: var(--green); }
+.tag-strat { background: var(--blue-bg); color: var(--blue); }
+.tag-err { background: var(--red-bg); color: var(--red); }
+
+.dash-detail {
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dash-edge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--primary);
+}
+
+.dash-reason {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.dash-pnl {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.dash-reasoning {
+    width: 100%;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+    line-height: 1.4;
+}
+
+.clr-green { color: var(--green) !important; }
+.clr-red { color: var(--red) !important; }
+
+/* Dashboard tables */
+.dash-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.dash-table th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border);
+}
+
+.dash-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.dash-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+/* Meta-agent grid */
+.dash-meta-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+}
+
+.dash-meta-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.dash-meta-item:last-child { border-bottom: none; }
+
+.dash-meta-label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.dash-meta-val {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-align: right;
+}
+
+@media (max-width: 900px) {
+    .dash-columns {
+        grid-template-columns: 1fr;
+    }
+    .dash-summary {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}

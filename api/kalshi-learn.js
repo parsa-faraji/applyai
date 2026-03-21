@@ -6,7 +6,7 @@
 // Returns: { resolved, calibrationStats, performanceByCategory, performanceByStrategy }
 
 import { getMarket } from './lib/kalshi.js';
-import { readTrades, readDecisions, logResolution } from './lib/trade-logger.js';
+import { readTrades, readDecisions, readCycleActions, logResolution } from './lib/trade-logger.js';
 import { updateCalibration, getCalibrationStats } from './lib/calibration.js';
 
 export const config = { maxDuration: 30 };
@@ -169,6 +169,87 @@ export default async function handler(req, res) {
             if (tradeWon) stratStats.wins++; else stratStats.losses++;
             stratStats.totalPnl += totalPnl;
             stratStats.winRate = stratStats.trades > 0 ? stratStats.wins / stratStats.trades : 0;
+        }
+
+        // 7. Paper trade resolution tracking
+        // Read paper trades from cycle-actions.jsonl and check if their markets resolved.
+        // This lets the meta-agent evaluate auto-trade performance before promoting to live.
+        const cycleActions = readCycleActions();
+        const paperTrades = cycleActions.filter(a =>
+            a.action === 'buy' && a.paper && a.ticker && !performance.resolved.has(a.ticker)
+        );
+        const paperToCheck = paperTrades.slice(0, 10);
+
+        if (paperToCheck.length > 0) {
+            const paperResults = await Promise.allSettled(
+                paperToCheck.map(async pt => {
+                    try {
+                        const marketData = await getMarket(pt.ticker);
+                        return { trade: pt, market: marketData.market || marketData };
+                    } catch (err) {
+                        return { trade: pt, error: err.message };
+                    }
+                })
+            );
+
+            for (const r of paperResults) {
+                if (r.status !== 'fulfilled') continue;
+                const { trade: pt, market, error } = r.value;
+                if (error || !market) continue;
+
+                const status = (market.status || '').toLowerCase();
+                if (status !== 'settled' && status !== 'closed' && status !== 'finalized') continue;
+
+                const settlementPrice = parseFloat(market.last_price_dollars || market.result_price || '');
+                if (isNaN(settlementPrice)) continue;
+
+                const yesWon = settlementPrice >= 0.95;
+                const noWon = settlementPrice <= 0.05;
+                if (!yesWon && !noWon) continue;
+
+                const side = (pt.side || 'yes').toLowerCase();
+                const won = (side === 'yes' && yesWon) || (side === 'no' && noWon);
+                const entryPrice = pt.price || 0.5;
+                const contracts = pt.count || 1;
+                const pnlPerContract = won ? (1 - entryPrice) : -entryPrice;
+
+                const resolution = {
+                    ticker: pt.ticker,
+                    market: pt.market || market.title,
+                    strategy: pt.strategy || 'auto-trade',
+                    category: pt.category || 'other',
+                    side,
+                    entryPrice,
+                    settlementPrice,
+                    won,
+                    pnlPerContract,
+                    totalPnl: pnlPerContract * contracts,
+                    contracts,
+                    paper: true,
+                    edge: pt.edge || null,
+                };
+
+                report.resolved.push(resolution);
+                report.newResolutions++;
+                performance.resolved.add(pt.ticker);
+
+                try { logResolution(resolution); } catch (err) { console.error('[learn] paper logResolution failed:', err.message); }
+
+                // Track in performance stats (paper trades count for promotion evaluation)
+                const cat = resolution.category;
+                if (!performance.byCategory[cat]) performance.byCategory[cat] = { wins: 0, losses: 0, totalPnl: 0, trades: 0, winRate: 0 };
+                performance.byCategory[cat].trades++;
+                if (won) performance.byCategory[cat].wins++; else performance.byCategory[cat].losses++;
+                performance.byCategory[cat].totalPnl += resolution.totalPnl;
+                performance.byCategory[cat].winRate = performance.byCategory[cat].wins / performance.byCategory[cat].trades;
+
+                const strat = resolution.strategy;
+                if (!performance.byStrategy[strat]) performance.byStrategy[strat] = { wins: 0, losses: 0, totalPnl: 0, trades: 0, winRate: 0 };
+                performance.byStrategy[strat].trades++;
+                if (won) performance.byStrategy[strat].wins++; else performance.byStrategy[strat].losses++;
+                performance.byStrategy[strat].totalPnl += resolution.totalPnl;
+                performance.byStrategy[strat].winRate = performance.byStrategy[strat].wins / performance.byStrategy[strat].trades;
+            }
         }
 
         performance.lastCheck = Date.now();

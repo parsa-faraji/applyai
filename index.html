@@ -17,6 +17,7 @@
                 <span class="logo-text">PredictBot</span>
             </div>
             <div class="nav-links">
+                <a href="#" class="nav-link" data-view="dashboard">Dashboard</a>
                 <a href="#" class="nav-link active" data-view="markets">Markets</a>
                 <a href="#" class="nav-link" data-view="portfolio">Portfolio</a>
                 <a href="#" class="nav-link" data-view="settings">Settings</a>
@@ -30,6 +31,76 @@
 
     <!-- Main Content -->
     <main class="main-content">
+        <!-- Dashboard View -->
+        <section id="dashboardView" class="view">
+            <div class="dashboard-layout">
+                <!-- Top: Summary Cards -->
+                <div class="dash-summary" id="dashSummary">
+                    <div class="dash-card">
+                        <div class="dash-card-label">Today's Trades</div>
+                        <div class="dash-card-value" id="dTodayTrades">--</div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-label">Today's P&L</div>
+                        <div class="dash-card-value" id="dTodayPnl">--</div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-label">All-Time Win Rate</div>
+                        <div class="dash-card-value" id="dWinRate">--</div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-label">All-Time P&L</div>
+                        <div class="dash-card-value" id="dAllPnl">--</div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-label">Resolutions</div>
+                        <div class="dash-card-value" id="dResolutions">--</div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-label">Calibration (k)</div>
+                        <div class="dash-card-value" id="dCalibration">--</div>
+                    </div>
+                </div>
+
+                <div class="dash-columns">
+                    <!-- Left: Activity Feed -->
+                    <div class="panel dash-panel">
+                        <div class="panel-header"><h2>Live Activity</h2></div>
+                        <div id="dashActivity" class="dash-feed">
+                            <div class="empty-state small"><p>Loading...</p></div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Strategy + Monitor -->
+                    <div class="dash-right">
+                        <!-- Strategy Performance -->
+                        <div class="panel dash-panel">
+                            <div class="panel-header"><h2>Strategy Performance</h2></div>
+                            <div id="dashStrategies" class="dash-table-wrap">
+                                <div class="empty-state small"><p>No resolution data yet</p></div>
+                            </div>
+                        </div>
+
+                        <!-- Meta-Agent Status -->
+                        <div class="panel dash-panel">
+                            <div class="panel-header"><h2>Meta-Agent</h2></div>
+                            <div id="dashMeta" class="dash-meta-content">
+                                <div class="empty-state small"><p>Loading...</p></div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Monitor Decisions -->
+                        <div class="panel dash-panel">
+                            <div class="panel-header"><h2>Monitor Decisions</h2></div>
+                            <div id="dashMonitor" class="dash-feed dash-feed-sm">
+                                <div class="empty-state small"><p>No monitor data yet</p></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- Markets View -->
         <section id="marketsView" class="view active">
             <div class="markets-layout">
@@ -332,5 +403,6 @@
     <div id="toastContainer" class="toast-container"></div>
 
     <script src="/js/app.js"></script>
+    <script src="/js/dashboard.js"></script>
 </body>
 </html>
