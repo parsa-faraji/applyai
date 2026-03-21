@@ -35,7 +35,7 @@ if (fs.existsSync(envPath)) {
 
 const PORT = process.env.PORT || 3000;
 const SERVER = process.env.SERVER_URL || `http://localhost:${PORT}`;
-const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '10') * 60 * 1000;
+const INTERVAL = parseInt(process.env.CYCLE_INTERVAL_MIN || '20') * 60 * 1000;
 
 const HEADERS = {
     'Content-Type': 'application/json',
@@ -236,9 +236,9 @@ async function runCycle() {
         }
     }
 
-    // 2. Safe Compounder
+    // 2. Safe Compounder — cap budget to actual cash available
     log('  Running Safe Compounder...');
-    const safeBudget = metaConfig?.strategyBudgets?.['safe-compounder'] ?? 50;
+    const safeBudget = Math.min(metaConfig?.strategyBudgets?.['safe-compounder'] ?? 50, cashBalance);
     const safe = await callEndpoint('Safe Compounder', '/api/kalshi-safe-compounder', {
         budget: safeBudget, maxPerTrade: 10, dryRun: false, marketLimit: 20,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
@@ -250,10 +250,11 @@ async function runCycle() {
         }
     }
 
-    // 2b. Weather Strategy
+    // 2b. Weather Strategy — cap budget to remaining cash
     log('  Running Weather Strategy...');
+    const weatherBudget = Math.min(50, Math.max(0, cashBalance - (safe?.totalSpent || 0)));
     const weather = await callEndpoint('Weather Strategy', '/api/kalshi-weather', {
-        budget: 50, maxPerTrade: 10, dryRun: false, marketLimit: 10,
+        budget: weatherBudget, maxPerTrade: 10, dryRun: false, marketLimit: 10,
     });
     if (weather) {
         log(`  Weather: ${weather.marketsScanned || 0} scanned, ${weather.tradesExecuted || 0} trades`);
@@ -262,28 +263,23 @@ async function runCycle() {
         }
     }
 
-    // 3. Market Maker
-    log('  Running Market Maker...');
-    const mm = await callEndpoint('Market Maker', '/api/kalshi-market-maker', {
-        budget: 50, maxPerMarket: 10, maxMarkets: 5, dryRun: false,
-    });
-    if (mm) {
-        log(`  MM: ${mm.marketsQuoted || 0} markets quoted, ${mm.ordersPlaced || 0} orders`);
-        for (const q of (mm.quotes || [])) {
-            log(`    → ${q.market?.slice(0, 40)} Buy@${q.buyPrice}¢ / Sell@${q.sellPrice}¢ (spread ${q.spread}¢)`);
-        }
-    }
+    // 3. Market Maker — DISABLED
+    // Critical bugs: sells wrong side (YES instead of NO), no order expiration,
+    // requires sub-second latency we don't have from Vercel serverless.
+    // Research confirms: market making from 10-min cycles is not viable.
+    log('  Market Maker: DISABLED (wrong-side bug, needs sub-second latency)');
 
-    // 4. Trading Bot (Bull vs Bear) — RE-ENABLED with fixed calibration
+    // 4. Trading Bot — cap budget to remaining cash
     log('  Running Trading Bot...');
     // Clean up expired exit cooldowns (2 hours)
     const COOLDOWN_MS = 2 * 60 * 60 * 1000;
     for (const [key, ts] of stats.recentExits) {
         if (Date.now() - ts > COOLDOWN_MS) stats.recentExits.delete(key);
     }
-    const botBudget = metaConfig?.strategyBudgets?.['auto-trade'] ?? 50;
+    const spentSoFar = (safe?.totalSpent || 0) + (weather?.totalSpent || 0);
+    const botBudget = Math.min(metaConfig?.strategyBudgets?.['auto-trade'] ?? 50, Math.max(0, cashBalance - spentSoFar));
     const bot = await callEndpoint('Trading Bot', '/api/kalshi-auto-trade', {
-        budget: botBudget, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 5,
+        budget: botBudget, maxPerTrade: 10, riskLevel: 'moderate', dryRun: false, marketLimit: 3,
         existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
         existingEventTickers: (sync?.positions || []).map(p => p.event_ticker).filter(Boolean),
         recentlyExited: [...stats.recentExits.keys()],
@@ -310,12 +306,12 @@ async function runCycle() {
         }
     }
 
-    // 5. Re-sync
-    await callEndpoint('Re-sync', '/api/kalshi-sync');
+    // 5. Re-sync (get fresh positions + balance after trades)
+    const resync = await callEndpoint('Re-sync', '/api/kalshi-sync');
 
     // 6. Monitor
     log('  Running Monitor...');
-    const positions = sync?.positions || [];
+    const positions = resync?.positions || sync?.positions || [];
     if (positions.length > 0) {
         const mon = await callEndpoint('Monitor', '/api/monitor', {
             positions,
@@ -339,13 +335,36 @@ async function runCycle() {
                 seenTickers.add(key);
                 return true;
             });
-            if (exitActions.length > 0) {
-                log(`  Executing ${exitActions.length} exit(s)${allExits.length > exitActions.length ? ` (${allExits.length - exitActions.length} duplicates skipped)` : ''}...`);
-                for (const exit of exitActions) {
+
+            // Strategy-aware filtering: safe-compounder NO positions should hold to resolution
+            // (they win ~90% of the time — early exits sacrifice the full $1 payout for pennies minus fees)
+            const filteredExits = exitActions.filter(exit => {
+                const pos = positions.find(p => (p.ticker === exit.ticker) || (p.tokenId === exit.tokenId));
+                if (!pos) return true; // let it through, will be caught later
+                const isSafeCompounder = pos.strategy === 'safe-compounder';
+                const isNo = (pos.outcome || '').toLowerCase() === 'no';
+                if (isSafeCompounder && isNo && exit.reason !== 'near_resolution_losing') {
+                    log(`    HOLD (safe-compounder): ${exit.ticker} — holding NO to resolution (reason: ${exit.reason})`);
+                    return false;
+                }
+                return true;
+            });
+
+            if (filteredExits.length > 0) {
+                // Cancel ALL resting orders first to free up locked cash
+                // (Kalshi locks cash in resting buy orders — this is why sells fail with insufficient_balance)
+                log(`  Cancelling resting orders to free cash for ${filteredExits.length} exit(s)...`);
+                const cleanup = await callEndpoint('Pre-exit Cleanup', '/api/kalshi-cleanup', { maxAgeMinutes: 0 });
+                if (cleanup) {
+                    log(`    Cancelled ${cleanup.cancelled || 0} resting orders`);
+                }
+
+                log(`  Executing ${filteredExits.length} exit(s)${allExits.length > filteredExits.length ? ` (${allExits.length - filteredExits.length} filtered)` : ''}...`);
+                for (const exit of filteredExits) {
                     // Find position details to sell
                     const pos = positions.find(p => (p.ticker === exit.ticker) || (p.tokenId === exit.tokenId));
                     if (!pos) {
-                        log(`    ⚠ Could not find position for ${exit.ticker || exit.tokenId}`);
+                        log(`    Could not find position for ${exit.ticker || exit.tokenId}`);
                         continue;
                     }
 
@@ -365,12 +384,12 @@ async function runCycle() {
                             stats.recentExits.set(exit.ticker, Date.now());
                             const exitedPos = positions.find(p => p.ticker === exit.ticker);
                             if (exitedPos?.event_ticker) stats.recentExits.set(exitedPos.event_ticker, Date.now());
-                            log(`    ✓ Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
+                            log(`    Sold ${Math.abs(shares)} ${side.toUpperCase()} contracts of ${exit.ticker} @ ${sellResult.trade.price}¢ (reason: ${exit.reason})`);
                         } else {
-                            log(`    ✗ Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
+                            log(`    Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
                         }
                     } catch (err) {
-                        log(`    ✗ Sell error for ${exit.ticker}: ${err.message}`);
+                        log(`    Sell error for ${exit.ticker}: ${err.message}`);
                     }
                 }
             }

@@ -154,8 +154,10 @@ ${context}
 
     // Geometric mean of odds (proven best aggregation — Brier 0.116 vs 0.122 for arithmetic mean)
     // Converts probabilities to log-odds, takes weighted average, converts back.
-    // Then extremize with a=2.0 (push away from 50% — models tend to underweight strong signals)
-    const EXTREMIZE_A = 2.0;
+    // NO extremization: KalshiBench proves all LLMs are already overconfident
+    // (Claude 90%+ confidence = 70% actual accuracy). Extremization amplifies this.
+    // Platt scaling in calibration.js handles all adjustment.
+    const EXTREMIZE_A = 1.0;
     let totalWeight = 0;
     let weightedLogOdds = 0;
 
@@ -170,8 +172,7 @@ ${context}
         ? 1 / (1 + Math.exp(-(weightedLogOdds / totalWeight)))
         : 0.5;
 
-    // Extremize: push probabilities away from 50% (aggregated forecasts are too moderate)
-    // Formula: odds^a where a > 1
+    // When EXTREMIZE_A = 1.0, this is a no-op (identity transform)
     const consensusOdds = rawConsensus / (1 - rawConsensus);
     const extremizedOdds = Math.pow(consensusOdds, EXTREMIZE_A);
     const consensusProbability = Math.max(0.01, Math.min(0.99, extremizedOdds / (1 + extremizedOdds)));

@@ -78,8 +78,8 @@ export default async function handler(req, res) {
                 }
             } catch {}
 
-            // Only cancel if price is truly stale AND order is old
-            if (shouldCancel && age > maxAge * 2) {
+            // Cancel if price is stale and order is past max age
+            if (shouldCancel && age > maxAge) {
                 try {
                     await authFetch('DELETE', `/portfolio/orders/${order.order_id}`, creds);
                     cancelled++;

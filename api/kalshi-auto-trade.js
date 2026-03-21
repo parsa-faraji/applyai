@@ -123,9 +123,9 @@ export default async function handler(req, res) {
             if (/\btweet\b|mention|say.*about|post.*about/i.test(t)) return false;
 
             // === QUALITY FILTERS ===
-            // Price: only 25-75¢ (sweet spot for edge vs fees)
+            // Price: only 30-70¢ (25-30¢ zone has punishing fee-to-price ratio)
             const price = parseFloat(m.last_price_dollars || '0.5');
-            if (price < 0.25 || price > 0.75) return false;
+            if (price < 0.30 || price > 0.70) return false;
             // Volume: require minimum activity (skip dead markets)
             if (vol < 10) return false;
             return true;
@@ -313,9 +313,9 @@ export default async function handler(req, res) {
                             priceCents = noAsk ? noAsk - 1 : (rawMarket.no_ask_dollars ? Math.round(parseFloat(rawMarket.no_ask_dollars) * 100) - 1 : 50);
                         }
                         priceCents = Math.min(priceCents, 99);
-                        // EXECUTION PRICE CHECK: verify price is still in 25-75¢ range
-                        if (priceCents < 25 || priceCents > 75) {
-                            report.analyses[report.analyses.length - 1].skipped = `execution price ${priceCents}¢ outside 25-75¢ range`;
+                        // EXECUTION PRICE CHECK: verify price is still in 30-70¢ range
+                        if (priceCents < 30 || priceCents > 70) {
+                            report.analyses[report.analyses.length - 1].skipped = `execution price ${priceCents}¢ outside 30-70¢ range`;
                             continue;
                         }
                         const contracts = Math.min(20, Math.floor((tradeAmount * 100) / priceCents));
@@ -331,6 +331,7 @@ export default async function handler(req, res) {
                             market,
                             hasLiveCreds, dryRun,
                             kalshiKeyId, kalshiPrivateKey,
+                            expirationMinutes: 20, // expire stale orders (same as safe-compounder)
                         });
 
                         // Attach reasoning to trade record
@@ -614,19 +615,23 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
     // ── INFORMATION QUALITY GATE: Require RELEVANT external data ──
     // Bookmaker odds are the gold standard (sharp money). News with 2+ headlines is decent.
     // ESPN scores alone are weak signal. FRED/NOAA data is only useful for matching markets.
+    // ── INFORMATION QUALITY GATE ──
+    // KalshiBench proves Claude alone is worse than base rates on uncertain events.
+    // Without external data (odds, news, ensemble), DO NOT TRADE. Period.
     const hasOdds = !!liveContext.odds?.consensus;
     const hasRealNews = !!(liveContext.news?.headlines?.length >= 2 && liveContext.news.provider !== 'polymarket_related');
     const hasEnsemble = !!(liveContext.ensemble?.shouldTrade);
     const hasRelevantData = hasOdds || hasRealNews || hasEnsemble;
-    if (!hasRelevantData && calibratedEdge < 20) {
+    if (!hasRelevantData) {
         return {
-            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Insufficient data — need odds, news, ensemble, or very large edge (≥20pts). Edge: ${calibratedEdge.toFixed(1)}pts` },
-            rawResponse: 'Skipped: no relevant external data and edge too small',
+            recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `No external data (odds/news/ensemble) — Claude alone has no edge. Skipping.` },
+            rawResponse: 'Skipped: no relevant external data',
         };
     }
 
-    // Require minimum edge: 10pts with odds/ensemble, 12pts without, 15pts for mid-range
-    const minEdge = isMidRange ? effectiveMinEdge : (liveContext.odds?.consensus ? 10 : 12);
+    // Require minimum edge: 15pts everywhere (research: 10pt edges eaten by fees on round trips)
+    // With bookmaker odds we can go slightly lower since odds are the most reliable signal
+    const minEdge = isMidRange ? effectiveMinEdge : (liveContext.odds?.consensus ? 12 : 15);
     if (calibratedEdge < minEdge) {
         return {
             recommendation: { action: 'HOLD', confidence: 'low', edge: calibratedEdge, kellyFraction: 0, reasoning: `Calibrated edge only ${calibratedEdge.toFixed(1)}pts (need ≥${minEdge}pts). Raw: ${Math.abs(rawProb * 100 - yesPrice).toFixed(1)}pts` },
@@ -731,7 +736,7 @@ function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSingle
 }
 
 async function executeKalshiTrade(params) {
-    const { ticker, side, action, count, price, market, hasLiveCreds, dryRun, kalshiKeyId, kalshiPrivateKey } = params;
+    const { ticker, side, action, count, price, market, hasLiveCreds, dryRun, kalshiKeyId, kalshiPrivateKey, expirationMinutes } = params;
     const costCents = price * count;
     const costDollars = costCents / 100;
 
@@ -761,8 +766,12 @@ async function executeKalshiTrade(params) {
 
     try {
         const privateKeyPem = decodeKey(kalshiPrivateKey);
+        const orderParams = { ticker, side, action, count, type: 'limit', [`${side}_price`]: price };
+        if (expirationMinutes) {
+            orderParams.expiration_ts = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
+        }
         const result = await placeOrder(
-            { ticker, side, action, count, [`${side}_price`]: price },
+            orderParams,
             { apiKeyId: kalshiKeyId, privateKeyPem }
         );
         tradeRecord.status = result.order?.status || 'submitted';
