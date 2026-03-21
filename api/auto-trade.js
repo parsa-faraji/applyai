@@ -158,6 +158,12 @@ export default async function handler(req, res) {
 
 // ── Data Fetching ──────────────────────────────────────────
 
+/**
+ * Fetch the most active Polymarket markets sorted by 24h volume.
+ * @param {number} limit - Maximum number of markets to return
+ * @returns {Promise<Array<object>>} Array of Gamma API market objects
+ * @throws {Error} If the Gamma API request fails
+ */
 async function fetchTopMarkets(limit) {
     const resp = await fetch(
         `https://gamma-api.polymarket.com/markets?limit=${limit}&active=true&closed=false&order=volume24hr&ascending=false`
@@ -166,6 +172,12 @@ async function fetchTopMarkets(limit) {
     return resp.json();
 }
 
+/**
+ * Fetch live order book and 24h price history for a Polymarket token.
+ * Computes spread, depth, momentum, and volatility metrics.
+ * @param {string} tokenId - CLOB token ID for the YES outcome
+ * @returns {Promise<{orderBook?: object, priceHistory?: object, summary: string}>}
+ */
 async function fetchLiveContext(tokenId) {
     const now = Math.floor(Date.now() / 1000);
     const oneDayAgo = now - 86400;
@@ -366,6 +378,14 @@ ${riskMap[riskLevel] || riskMap.moderate}
 
 // ── Trade Execution Logic ──────────────────────────────────
 
+/**
+ * Determine whether a Claude recommendation meets the threshold for execution
+ * based on the user's risk tolerance. Uses spread-adjusted edge when available.
+ *
+ * @param {object} rec - Claude's recommendation (action, confidence, edgePercent, spreadAdjustedEdge)
+ * @param {'conservative'|'moderate'|'aggressive'} riskLevel - User's risk setting
+ * @returns {boolean} true if the trade should be executed
+ */
 function shouldExecute(rec, riskLevel) {
     if (!rec || rec.action === 'HOLD') return false;
 
@@ -378,6 +398,20 @@ function shouldExecute(rec, riskLevel) {
     return conf !== 'low' && edge >= 3; // aggressive
 }
 
+/**
+ * Calculate position size using half-Kelly criterion with confidence scaling.
+ *
+ * Kelly fraction: f* = (bp - q) / b, where b = payout odds, p = probability, q = 1-p
+ * Half-Kelly is used for safety (reduces variance at cost of ~25% expected growth).
+ * The result is further scaled by confidence level and capped by portfolio limits.
+ *
+ * @param {object} rec - Recommendation with myProbability, spreadAdjustedEdge, confidence
+ * @param {number} budgetLeft - Remaining USDC budget for this session
+ * @param {number} maxPerTrade - Maximum USDC per individual trade
+ * @param {number} totalBudget - Total portfolio budget (for percentage caps)
+ * @param {number} maxSinglePct - Maximum fraction of total budget in a single market (0-1)
+ * @returns {number} Trade amount in USDC (integer, may be 0)
+ */
 function calculateKellySize(rec, budgetLeft, maxPerTrade, totalBudget, maxSinglePct) {
     const prob = (rec.myProbability || 50) / 100;
     const edge = Math.abs(rec.spreadAdjustedEdge || rec.edgePercent || 0) / 100;

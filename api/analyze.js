@@ -209,8 +209,14 @@ Respond with this exact structure:
     }
 }
 
-// Helpers
+// ── Helpers ────────────────────────────────────────────────────
 
+/**
+ * Safely parse a JSON string or return the value if already parsed.
+ * @param {string|Array|*} val - Value to parse (string, array, or other)
+ * @param {*} fallback - Default value if parsing fails
+ * @returns {*} Parsed value or fallback
+ */
 function parseJson(val, fallback) {
     if (Array.isArray(val)) return val;
     if (typeof val === 'string') {
@@ -219,6 +225,12 @@ function parseJson(val, fallback) {
     return fallback;
 }
 
+/**
+ * Fetch a URL and return parsed JSON, or null on any error.
+ * Used for non-critical data fetches where failure is acceptable.
+ * @param {string} url - URL to fetch
+ * @returns {Promise<object|null>} Parsed JSON response, or null on failure
+ */
 async function fetchSafe(url) {
     try {
         const resp = await fetch(url);
@@ -229,6 +241,12 @@ async function fetchSafe(url) {
     }
 }
 
+/**
+ * Extract trading-relevant metrics from a CLOB order book.
+ * Returns bid/ask spread, depth in USD, and buy/sell pressure ratio.
+ * @param {object|null} book - Raw order book from Polymarket CLOB
+ * @returns {object|null} Summarized order book metrics, or null if no data
+ */
 function summarizeOrderBook(book) {
     if (!book) return null;
     const bids = (book.bids || []).slice(0, 10);
@@ -250,6 +268,12 @@ function summarizeOrderBook(book) {
     };
 }
 
+/**
+ * Analyze 24h price history to extract trading signals.
+ * Computes: current price, 24h change, high/low, 6h momentum, and volatility.
+ * @param {object|null} data - Raw price history from CLOB API
+ * @returns {object|null} Price analysis with momentum and volatility, or null
+ */
 function analyzePriceHistory(data) {
     if (!data) return null;
     const history = data.history || data || [];
@@ -294,6 +318,12 @@ function analyzePriceHistory(data) {
     };
 }
 
+/**
+ * Parse Claude's markdown-formatted recommendation into structured data.
+ * Extracts action (BUY YES/BUY NO/HOLD), confidence, reasoning, and size.
+ * @param {string} text - Claude's full analysis response text
+ * @returns {{action: string, confidence: string, reasoning: string, suggestedSize: string}}
+ */
 function parseRecommendation(text) {
     const rec = { action: 'HOLD', confidence: 'Low', reasoning: '', suggestedSize: 'Small' };
 

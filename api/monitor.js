@@ -299,8 +299,15 @@ async function fetchRecentPrices(tokenId) {
 }
 
 /**
- * Detect momentum direction and reversals from recent price data
- * Returns { direction: 'rising'|'falling'|'flat', strength: 0-1, reversal: boolean }
+ * Detect momentum direction and reversals from recent price data.
+ * Compares two consecutive windows of prices to determine trend.
+ *
+ * @param {number[]} prices - Array of recent prices (chronological order)
+ * @param {number} [window=5] - Number of data points per comparison window
+ * @returns {{direction: 'rising'|'falling'|'flat', strength: number, reversal: boolean}}
+ *   - direction: current price trend
+ *   - strength: 0-1 normalized magnitude of the move
+ *   - reversal: true if trend direction changed between windows
  */
 function detectMomentum(prices, window = 5) {
     if (!prices || prices.length < window * 2) {
