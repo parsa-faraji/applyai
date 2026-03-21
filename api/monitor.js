@@ -391,11 +391,16 @@ ${context}
 - If the position is losing BUT news/odds suggest a recovery is likely → HOLD
 - If the position is profitable AND news/odds suggest the trend continues → HOLD for more
 - If the position is profitable BUT showing signs of reversal → SELL to lock in profit
-- If no news/odds data is available, lean toward the threshold's default (sell)
+- If no news/odds data is available, lean toward HOLD (prediction markets resolve at $0 or $1 — premature exits lock in losses)
 - Consider time to resolution — if the market resolves soon, holding a loser is riskier
 
+## Grounding Rules
+- ONLY cite facts from the data above. Do NOT fabricate news, scores, or events.
+- If no relevant data is available, default to HOLD.
+- Your reasoning must reference specific data points provided above.
+
 ## Response (JSON only)
-{"action": "SELL" or "HOLD", "reasoning": "<1 sentence explaining why>"}`;
+{"action": "SELL" or "HOLD", "reasoning": "<1 sentence citing specific data above>"}`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -407,6 +412,7 @@ ${context}
         body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 200,
+            temperature: 0,
             messages: [{ role: 'user', content: prompt }],
         }),
     });

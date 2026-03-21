@@ -232,7 +232,13 @@ Description: ${market.description || 'No description available'}
 ${newsSnippet}${oddsContext}
 
 Be calibrated: 10% means it happens 1 in 10 times. Consider base rates carefully.
-Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence"}`;
+
+GROUNDING RULES:
+- ONLY cite facts from the data above. Do NOT fabricate statistics or events.
+- If no relevant data is provided, stay near base rates and say why in reasoning.
+- Do NOT invent injury reports, game results, or performance stats.
+
+Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence citing specific data"}`;
 
                     const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
                         method: 'POST',
@@ -244,6 +250,7 @@ Reply with JSON: {"trueYesProb": 0.0-1.0, "reasoning": "1 sentence"}`;
                         body: JSON.stringify({
                             model: 'claude-sonnet-4-20250514',
                             max_tokens: 200,
+                            temperature: 0,
                             messages: [{ role: 'user', content: claudePrompt }],
                         }),
                     });

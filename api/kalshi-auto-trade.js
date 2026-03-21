@@ -394,6 +394,7 @@ async function callClaude(apiKey, prompt, maxTokens) {
         body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
             max_tokens: maxTokens,
+            temperature: 0, // Deterministic: reduces hallucination and creative fabrication
             messages: [{ role: 'user', content: prompt }],
         }),
     });
@@ -461,6 +462,12 @@ CALIBRATION RULES:
 - Use precise values (73%, not "about 70%")
 - State what you DON'T know — uncertainty should widen your estimate toward 50%
 - Prediction markets are efficient; explain specifically why the market might be wrong
+
+GROUNDING RULES:
+- ONLY cite facts from the data provided above. Do NOT fabricate statistics, scores, or events.
+- If no relevant data is provided, set confidence to "low" and stay near 50%.
+- Do NOT invent base rates — if you don't have real data, say so in keyFactors.
+- keyFactors must reference specific evidence from the data above.
 
 Reply JSON: {"probability": 0.0-1.0, "keyFactors": ["factor1", "factor2"], "confidence": "low"|"medium"|"high"}`;
 
@@ -567,7 +574,13 @@ ${newsSection}${sportsSection}
 
 Is there a specific reason (injury, suspension, lineup change, breaking news, weather) that explains why the Kalshi price differs from the bookmaker odds? If not, the bookmaker odds are likely more accurate.
 
-JSON: {"divergenceExplained": true|false, "reason": "1 sentence or null", "adjustmentDirection": "toward_market"|"toward_odds"|"none", "adjustmentMagnitude": 0.0-0.10}`;
+GROUNDING RULES:
+- ONLY cite facts present in the data above. Do NOT use external knowledge or memory.
+- If no news/data is provided, answer divergenceExplained: false.
+- Do NOT fabricate statistics, injury reports, or game results.
+- When uncertain, default to trusting the bookmaker odds.
+
+JSON: {"divergenceExplained": true|false, "reason": "1 sentence citing specific data above, or null", "adjustmentDirection": "toward_market"|"toward_odds"|"none", "adjustmentMagnitude": 0.0-0.10}`;
 
     const text = await callClaude(apiKey, prompt, 250);
     try {
@@ -607,7 +620,15 @@ async function analyzeWithClaude(market, apiKey, riskLevel, budgetLeft, maxPerTr
         }
 
         // Ask Claude only: "Is the divergence explained by news?"
-        const tiebreaker = await runTiebreakerStage(market, apiKey, oddsBaseProb, yesPrice / 100, liveContext);
+        let tiebreaker = await runTiebreakerStage(market, apiKey, oddsBaseProb, yesPrice / 100, liveContext);
+
+        // GROUNDING CHECK: If Claude says divergence is explained but there's no actual
+        // news or sports data to ground the claim, override to unexplained.
+        // This prevents hallucinated injuries/events from flipping the signal.
+        const hasGroundingData = !!(liveContext.news?.headlines?.length || liveContext.sports);
+        if (tiebreaker.divergenceExplained && !hasGroundingData) {
+            tiebreaker = { divergenceExplained: false, reason: null, adjustmentDirection: 'none', adjustmentMagnitude: 0 };
+        }
 
         // If Claude found a reason the divergence is justified, adjust toward market
         let adjustment = 0;
