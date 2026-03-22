@@ -88,11 +88,18 @@ export default async function handler(req, res) {
         }));
 
         // Paper trades tracker — merge cycle-action paper buys with resolution outcomes
-        const paperBuys = allCycles.filter(a => a.action === 'buy' && a.paper && a.ticker);
-        const resolvedTickers = new Set(allResolutions.map(r => r.ticker));
+        // Deduplicate: only show latest entry per ticker (bot may trade same ticker across cycles)
+        const paperBuysRaw = allCycles.filter(a => a.action === 'buy' && a.paper && a.ticker);
+        const seenPaperTickers = new Set();
+        const paperBuys = paperBuysRaw.filter(pb => {
+            if (seenPaperTickers.has(pb.ticker)) return false;
+            seenPaperTickers.add(pb.ticker);
+            return true;
+        });
 
         const paperTrades = paperBuys.map(pb => {
-            const resolution = allResolutions.find(r => r.ticker === pb.ticker && r.paper);
+            // Match resolution by ticker — don't require paper flag since trades.jsonl resolutions lack it
+            const resolution = allResolutions.find(r => r.ticker === pb.ticker);
             if (resolution) {
                 return {
                     ticker: pb.ticker,
@@ -123,9 +130,16 @@ export default async function handler(req, res) {
             };
         }).reverse(); // newest first
 
-        // Also include live (non-paper) trades that haven't resolved
-        const liveTrades = allCycles.filter(a => a.action === 'buy' && !a.paper && a.ticker).map(lb => {
-            const resolution = allResolutions.find(r => r.ticker === lb.ticker && !r.paper);
+        // Also include live (non-paper) trades — deduplicate by ticker
+        const liveTradesRaw = allCycles.filter(a => a.action === 'buy' && !a.paper && a.ticker);
+        const seenLiveTickers = new Set();
+        const liveTradesBuys = liveTradesRaw.filter(lb => {
+            if (seenLiveTickers.has(lb.ticker)) return false;
+            seenLiveTickers.add(lb.ticker);
+            return true;
+        });
+        const liveTrades = liveTradesBuys.map(lb => {
+            const resolution = allResolutions.find(r => r.ticker === lb.ticker);
             if (resolution) {
                 return {
                     ticker: lb.ticker,

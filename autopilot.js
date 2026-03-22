@@ -84,6 +84,20 @@ const stats = {
     reportGeneratedToday: false, // flag to generate report once per day
 };
 
+// Seed sessionTrades from JSONL so we don't re-trade tickers after a deploy
+try {
+    const { readCycleActions } = await import('./api/lib/trade-logger.js');
+    const pastActions = readCycleActions();
+    for (const a of pastActions) {
+        if (a.action === 'buy' && a.ticker) stats.sessionTrades.add(a.ticker);
+    }
+    if (stats.sessionTrades.size > 0) {
+        log(`Loaded ${stats.sessionTrades.size} previously traded tickers from logs`);
+    }
+} catch (err) {
+    log(`Could not seed session trades: ${err.message}`);
+}
+
 async function callEndpoint(name, path, body = {}) {
     // Estimate API cost per endpoint
     const costMap = { 'Safe Compounder': 0.05, 'Weather Strategy': 0, 'Market Maker': 0, 'Trading Bot': 0.30, 'Monitor': 0.05, 'Sync': 0, 'Re-sync': 0, 'Cleanup': 0, 'Assess': 0.50, 'Learning': 0 };

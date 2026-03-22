@@ -117,6 +117,18 @@ export function logResolution(resolution) {
 }
 
 /**
+ * Read all resolutions from the log
+ */
+export function readResolutions() {
+    if (!fs.existsSync(RESOLUTION_LOG)) return [];
+    return fs.readFileSync(RESOLUTION_LOG, 'utf-8')
+        .split('\n')
+        .filter(Boolean)
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean);
+}
+
+/**
  * Get recent resolved trades (for self-reflection context)
  */
 export function getRecentResolved(limit = 20) {

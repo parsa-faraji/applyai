@@ -6,7 +6,7 @@
 // Returns: { resolved, calibrationStats, performanceByCategory, performanceByStrategy }
 
 import { getMarket } from './lib/kalshi.js';
-import { readTrades, readDecisions, readCycleActions, logResolution } from './lib/trade-logger.js';
+import { readTrades, readDecisions, readCycleActions, readResolutions, logResolution } from './lib/trade-logger.js';
 import { updateCalibration, getCalibrationStats } from './lib/calibration.js';
 
 export const config = { maxDuration: 30 };
@@ -39,16 +39,22 @@ export default async function handler(req, res) {
     };
 
     try {
+        // 0. Load already-resolved tickers from JSONL (survives process restarts)
+        const existingResolutions = readResolutions();
+        for (const r of existingResolutions) {
+            if (r.ticker) performance.resolved.add(r.ticker);
+        }
+
         // 1. Read all logged trades
         const trades = readTrades();
-        if (trades.length === 0) {
+        if (trades.length === 0 && readCycleActions().filter(a => a.action === 'buy' && a.paper).length === 0) {
             report.calibrationStats = getCalibrationStats();
             report.performanceByCategory = performance.byCategory;
             report.performanceByStrategy = performance.byStrategy;
             return res.status(200).json(report);
         }
 
-        // 2. Find trades we haven't checked yet
+        // 2. Find trades we haven't checked yet (deduplicated against JSONL)
         const unchecked = trades.filter(t =>
             t.ticker && !performance.resolved.has(t.ticker)
         );
