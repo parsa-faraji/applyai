@@ -492,12 +492,134 @@ async function runCycle() {
     log('═══ Cycle complete ═══\n');
 }
 
+// ═══ Fast Monitor — checks live-game positions every 3 minutes ═══
+// Only runs the monitor endpoint (1 Claude call per position).
+// Does NOT run strategies, learning, or meta-agent.
+const FAST_MONITOR_INTERVAL = 3 * 60 * 1000; // 3 minutes
+const SPORTS_PATTERN = /\b(nba|nfl|nhl|mlb|ncaa|ufc|mma|soccer|football|basketball|baseball|hockey|tennis|epl|liga|lol|csgo|dota|esports|league of legends)\b/i;
+
+async function runFastMonitor() {
+    // 1. Sync positions
+    const sync = await callEndpoint('Sync', '/api/kalshi-sync');
+    if (!sync?.positions?.length) return;
+
+    // 2. Filter to sports/esports positions only
+    const sportsPositions = sync.positions.filter(p => {
+        const text = (p.market || '') + ' ' + (p.ticker || '') + ' ' + (p.event_ticker || '');
+        return SPORTS_PATTERN.test(text);
+    });
+
+    if (sportsPositions.length === 0) return;
+
+    // 3. Check if any games are live via ESPN (cheap, no API key needed)
+    let hasLiveGame = false;
+    try {
+        const resp = await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard');
+        const data = await resp.json();
+        const events = data.events || [];
+        const liveGames = events.filter(e => e.status?.type?.state === 'in');
+        if (liveGames.length > 0) hasLiveGame = true;
+    } catch {}
+
+    // Also check other sports if needed
+    if (!hasLiveGame) {
+        for (const league of ['football/nfl', 'baseball/mlb', 'hockey/nhl']) {
+            try {
+                const resp = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${league}/scoreboard`);
+                const data = await resp.json();
+                if ((data.events || []).some(e => e.status?.type?.state === 'in')) {
+                    hasLiveGame = true;
+                    break;
+                }
+            } catch {}
+        }
+    }
+
+    if (!hasLiveGame) return; // No live games — skip fast monitoring
+
+    log('⚡ Fast Monitor: live game detected, checking sports positions...');
+
+    // 4. Run monitor only on sports positions
+    const mon = await callEndpoint('Monitor', '/api/monitor', {
+        positions: sportsPositions,
+        stopLossPct: 30,
+        takeProfitPct: 50,
+        trailingStopPct: 15,
+        spikeThreshold: 15,
+    });
+
+    if (!mon) return;
+
+    log(`⚡ Fast Monitor: ${mon.positionsChecked || 0} checked, ${mon.alerts?.length || 0} alerts, ${mon.actions?.length || 0} actions`);
+    for (const a of (mon.alerts || [])) {
+        log(`    ${a.type}: ${a.message}`);
+    }
+
+    // 5. Execute exits (same logic as main cycle)
+    const allExits = (mon.actions || []).filter(a => a.type === 'exit');
+    const seenTickers = new Set();
+    const exitActions = allExits.filter(a => {
+        const key = a.ticker || a.tokenId;
+        if (seenTickers.has(key)) return false;
+        seenTickers.add(key);
+        return true;
+    });
+
+    // Filter safe-compounder NO holds
+    const filteredExits = exitActions.filter(exit => {
+        const pos = sportsPositions.find(p => p.ticker === exit.ticker || p.tokenId === exit.tokenId);
+        if (!pos) return true;
+        if (pos.strategy === 'safe-compounder' && (pos.outcome || '').toLowerCase() === 'no' && exit.reason !== 'near_resolution_losing') {
+            log(`    HOLD (safe-compounder): ${exit.ticker}`);
+            return false;
+        }
+        return true;
+    });
+
+    if (filteredExits.length > 0) {
+        log(`⚡ Fast Monitor: executing ${filteredExits.length} exit(s)...`);
+        // Cancel resting orders first
+        await callEndpoint('Pre-exit Cleanup', '/api/kalshi-cleanup', { maxAgeMinutes: 0, forceAll: true });
+
+        for (const exit of filteredExits) {
+            const pos = sportsPositions.find(p => p.ticker === exit.ticker || p.tokenId === exit.tokenId);
+            if (!pos) continue;
+            const shares = exit.shares || pos.position_fp || pos.shares || 0;
+            if (shares <= 0) continue;
+            const side = (pos.outcome || 'yes').toLowerCase();
+
+            try {
+                let sellResult = await callEndpoint('Exit Trade', '/api/kalshi-trade', {
+                    ticker: exit.ticker || pos.ticker, side, action: 'sell', count: Math.abs(shares),
+                });
+                if (!sellResult?.trade && JSON.stringify(sellResult).includes('insufficient')) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    sellResult = await callEndpoint('Exit Trade (retry)', '/api/kalshi-trade', {
+                        ticker: exit.ticker || pos.ticker, side, action: 'sell', count: Math.abs(shares),
+                    });
+                }
+                if (sellResult?.trade) {
+                    stats.totalSells++;
+                    stats.recentExits.set(exit.ticker, Date.now());
+                    log(`    ⚡ Sold ${Math.abs(shares)} ${side.toUpperCase()} of ${exit.ticker} @ ${sellResult.trade.price}¢ (fast monitor, reason: ${exit.reason})`);
+                    try { logCycleAction({ action: 'exit', ticker: exit.ticker, side, shares: Math.abs(shares), price: sellResult.trade.price, reason: exit.reason + ' (fast)', pnlPct: exit.pnlPct, market: pos?.market, cycle: stats.cyclesRun }); } catch (err) { console.error('logCycleAction failed:', err.message); }
+                } else {
+                    log(`    ⚡ Sell failed for ${exit.ticker}: ${sellResult?.error || 'unknown'}`);
+                }
+            } catch (err) {
+                log(`    ⚡ Sell error: ${err.message}`);
+            }
+        }
+    }
+}
+
 let cycleCount = 0;
 
 // Start
 log('Autopilot starting...');
 log(`Server: ${SERVER}`);
 log(`Cycle interval: ${INTERVAL / 60000} minutes`);
+log(`Fast monitor: every 3 min (sports positions during live games)`);
 log('API Keys:');
 log(`  Anthropic (Claude): ${HEADERS['X-Anthropic-Key'] ? '✓ SET' : '✗ MISSING — bot cannot trade'}`);
 log(`  Kalshi:             ${HEADERS['X-Kalshi-Key-Id'] ? '✓ SET' : '✗ MISSING — no live trading'}`);
@@ -511,4 +633,6 @@ log('');
 // Run immediately, then on interval
 runCycle().then(() => {
     setInterval(runCycle, INTERVAL);
+    // Fast monitor runs independently every 3 min for live-game sports positions
+    setInterval(runFastMonitor, FAST_MONITOR_INTERVAL);
 });
