@@ -146,6 +146,7 @@ export default async function handler(req, res) {
             balance: balanceResult.balance != null ? balanceResult.balance / 100 : null,
             portfolioValue: balanceResult.portfolio_value != null ? balanceResult.portfolio_value / 100 : null,
             openOrders: orders.filter(o => o.status === 'resting').length,
+            restingTickers: [...new Set(orders.filter(o => o.status === 'resting').map(o => o.ticker).filter(Boolean))],
             synced: new Date().toISOString(),
         });
 

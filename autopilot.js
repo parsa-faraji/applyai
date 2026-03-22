@@ -268,9 +268,14 @@ async function runCycle() {
     // 2. Safe Compounder — cap budget to actual cash available
     log('  Running Safe Compounder...');
     const safeBudget = Math.min(metaConfig?.strategyBudgets?.['safe-compounder'] ?? 50, cashBalance);
+    // Include both filled positions AND resting order tickers to prevent re-buying
+    const allOwnedTickers = [
+        ...(sync?.positions || []).map(p => p.ticker).filter(Boolean),
+        ...(sync?.restingTickers || []),
+    ];
     const safe = await callEndpoint('Safe Compounder', '/api/kalshi-safe-compounder', {
         budget: safeBudget, maxPerTrade: 10, dryRun: false, marketLimit: 20,
-        existingPositions: (sync?.positions || []).map(p => p.ticker).filter(Boolean),
+        existingPositions: allOwnedTickers,
     });
     if (safe) {
         log(`  Safe: scanned ${safe.marketsScanned || '?'}, ${safe.candidates || 0} candidates, ${safe.tradesExecuted || 0} trades`);

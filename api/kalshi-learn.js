@@ -5,9 +5,14 @@
 // Called periodically by the autopilot (every ~10 cycles).
 // Returns: { resolved, calibrationStats, performanceByCategory, performanceByStrategy }
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getMarket } from './lib/kalshi.js';
 import { readTrades, readDecisions, readCycleActions, readResolutions, logResolution } from './lib/trade-logger.js';
 import { updateCalibration, getCalibrationStats } from './lib/calibration.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const config = { maxDuration: 30 };
 
@@ -40,9 +45,32 @@ export default async function handler(req, res) {
 
     try {
         // 0. Load already-resolved tickers from JSONL (survives process restarts)
+        //    Also deduplicate — clean up any duplicate resolutions from the bug
         const existingResolutions = readResolutions();
+        const seenResTickers = new Set();
+        let hasDuplicates = false;
         for (const r of existingResolutions) {
-            if (r.ticker) performance.resolved.add(r.ticker);
+            if (r.ticker) {
+                if (seenResTickers.has(r.ticker)) hasDuplicates = true;
+                seenResTickers.add(r.ticker);
+                performance.resolved.add(r.ticker);
+            }
+        }
+
+        // Clean up duplicate resolutions in JSONL file
+        if (hasDuplicates) {
+            try {
+                const dedupedMap = new Map();
+                for (const r of existingResolutions) {
+                    if (r.ticker && !dedupedMap.has(r.ticker)) dedupedMap.set(r.ticker, r);
+                }
+                const dedupedLines = [...dedupedMap.values()].map(r => JSON.stringify(r)).join('\n') + '\n';
+                const resPath = path.join(__dirname, '..', 'data', 'resolutions.jsonl');
+                fs.writeFileSync(resPath, dedupedLines);
+                console.log(`[learn] Deduplicated resolutions: ${existingResolutions.length} → ${dedupedMap.size}`);
+            } catch (err) {
+                console.error('[learn] Failed to deduplicate resolutions:', err.message);
+            }
         }
 
         // 1. Read all logged trades
