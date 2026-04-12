@@ -1,6 +1,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude-9333EA?style=flat-square&logo=anthropic)](https://claude.ai)
 [![Vercel](https://img.shields.io/badge/Hosted%20on-Vercel-000000?style=flat-square&logo=vercel)](https://vercel.com)
 
 # PredictBot — AI-Powered Prediction Market Trading
@@ -32,30 +33,48 @@ Frontend (Vanilla JS)  →  Vercel Serverless Functions  →  Polymarket Gamma A
 | `/api/analyze` | POST | Send market data to Claude for analysis |
 | `/api/trade` | POST | Execute trades via Polymarket CLOB API |
 
-## Setup
+## Installation
 
-1. Clone and install:
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/parsa-faraji/applyai.git
+   cd applyai
+   ```
+
+2. Install dependencies:
    ```bash
    npm install
    ```
 
-2. Set environment variables (or configure in the app's Settings page):
-   ```
-   ANTHROPIC_API_KEY=sk-ant-...
-   POLYMARKET_API_KEY=...
-   POLYMARKET_API_SECRET=...
-   POLYMARKET_PASSPHRASE=...
+3. Configure environment variables:
+   ```bash
+   cp .env.example .env
    ```
 
-3. Run locally:
-   ```bash
-   npm run dev
-   ```
+   Then edit `.env` with your API keys:
+   - **ANTHROPIC_API_KEY** (required) — [Get your Claude API key](https://console.anthropic.com/account/keys)
+   - **POLYMARKET_API_KEY**, **POLYMARKET_API_SECRET**, **POLYMARKET_PASSPHRASE** — For trading on Polymarket
+   - **KALSHI_API_KEY_ID**, **KALSHI_PRIVATE_KEY** — For trading on Kalshi (optional)
+   - **BRAVE_API_KEY** — [Free news search API](https://brave.com/search/api/) (optional)
+   - **FRED_API_KEY** — [Federal Reserve economic data](https://fred.stlouisfed.org/docs/api/api_key.html) (optional)
 
-4. Deploy:
-   ```bash
-   npm run deploy
-   ```
+## Usage
+
+**Development:**
+```bash
+npm run dev          # Start local server with auto-reload
+```
+
+**Autopilot (background trading bot):**
+```bash
+npm run bot          # Run the AI trading autopilot
+```
+
+**Production:**
+```bash
+npm run start        # Start production server
+npm run deploy       # Deploy to Vercel
+```
 
 ## Configuration
 
